@@ -431,7 +431,7 @@ enum StoryCmd {
     SmugmugAlbums,
     /// Enhance an existing post with Claude: start (or reopen) a story tied to it (see /enhance-post).
     Enhance {
-        /// Content item id, slug, or URL (e.g. articles/amiga-devbench)
+        /// Content item id, slug, or URL (e.g. articles/my-first-post)
         item: String,
     },
     /// What Claude reads for an enhancement: the post, the author's answers, the repository.

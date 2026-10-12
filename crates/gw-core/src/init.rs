@@ -153,8 +153,9 @@ fn starter(o: &InitOptions) -> Vec<(String, String)> {
         (
             "content/pages/home.adoc".into(),
             format!(
-                "= Home\n:type: page\n:slug: home\n\n{}\n\nThis is the home page. Edit `content/pages/home.adoc` to say who you are and what you\nwrite about; the latest articles and featured projects are listed below it.\n",
-                if o.tagline.is_empty() { format!("Welcome to {}.", o.title) } else { o.tagline.clone() }
+                "= Home\n:type: page\n:slug: home\n\n{}This is the home page. Edit `content/pages/home.adoc` to say who you are and what you\nwrite about; the latest articles and featured projects are listed below it.\n",
+                // The theme already shows the tagline above this text; only greet when there is none.
+                if o.tagline.is_empty() { format!("Welcome to {}.\n\n", o.title) } else { String::new() }
             ),
         ),
         (

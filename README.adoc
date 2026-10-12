@@ -27,8 +27,26 @@ are about.
 
 == Screenshots
 
-_To come:_ the setup screen, the content list, an enhancement in progress (questions, the
-proposal diff), the grouped projects page, and the default theme.
+The app, running against a demo site made with `gw init`.
+
+.Content: every article, project, and page, with its areas and status
+image::docs/images/app-content.png[The content list in the gitwebsite app]
+
+.Editing a post beside a live preview
+image::docs/images/app-editor.png[The editor with AsciiDoc on the left and the rendered page on the right]
+
+.Enhance with Claude: Claude asks on the page; answer there
+image::docs/images/app-enhance.png[An enhancement in progress, with a question from Claude waiting for an answer]
+
+.The proposal as a diff against the post, to accept, discard, or send back
+image::docs/images/app-proposal.png[The proposed revision shown as a diff]
+
+.Check, preview, and publish
+image::docs/images/app-publish.png[The Build and Publish page]
+
+.The default theme: home page and the projects page grouped by area
+image::docs/images/site-home.png[The home page of a site built with the default theme]
+image::docs/images/site-projects.png[The projects page grouped into Software, Making, and Retro computing]
 
 == Quick start
 
