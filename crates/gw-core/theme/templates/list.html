@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% import "macros.html" as m %}
+{% block main %}
+<section class="wrap block page-top">
+  <h1>{{ heading }}</h1>
+  {% if intro %}<p class="lede">{{ intro }}</p>{% endif %}
+  {% if groups %}
+  <div class="filter-bar" data-area-filter role="group" aria-label="Show by area">
+    <button type="button" class="filter on" data-area="" aria-pressed="true">All</button>
+    {% for f in filters %}<button type="button" class="filter depth-{{ f.depth }}" data-area="{{ f.path }}" aria-pressed="false">{{ f.title }}</button>{% endfor %}
+  </div>
+  {% for g in groups %}
+  <section class="group" data-group="{{ g.id }}">
+    <h2 class="group-title">{{ g.title }}</h2>
+    <div class="grid">{% for e in g.entries %}{{ m::grouped_card(e=e) }}{% endfor %}</div>
+  </section>
+  {% endfor %}
+  <p class="empty" data-filter-empty hidden>Nothing in this area yet.</p>
+  {% elif entries %}<div class="grid">{% for v in entries %}{{ m::card(v=v) }}{% endfor %}</div>
+  {% else %}<p class="empty">Nothing here yet.</p>{% endif %}
+</section>
+{% endblock %}

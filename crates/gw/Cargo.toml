@@ -1,0 +1,42 @@
+[package]
+name = "gw"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "gitwebsite: CLI, REST server, and MCP server for a website built from AsciiDoc in git"
+
+[lib]
+name = "gw"
+path = "src/lib.rs"
+
+[[bin]]
+name = "gw"
+path = "src/main.rs"
+
+[dependencies]
+gw-core = { path = "../gw-core" }
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+chrono.workspace = true
+clap.workspace = true
+tokio.workspace = true
+axum.workspace = true
+# server
+tower-http = { version = "0.6", features = ["fs", "cors", "trace"] }
+open = "5"
+# integrations
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "multipart", "rustls-tls"] }
+hmac = "0.12"
+sha1 = "0.10"
+base64 = "0.22"
+rand = "0.8"
+urlencoding = "2"
+quick-xml = { version = "0.37", features = ["serialize"] }
+regex = "1"
+walkdir = "2"
+futures-util = "0.3"
+
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["jpeg"] }

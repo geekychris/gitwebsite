@@ -1,0 +1,38 @@
+= Registry and ideas
+:toc:
+
+== The registry: where things came from
+
+`site/registry.yaml` records every piece of work the site knows about and its origin. Kinds:
+
+[cols="1,3",options="header"]
+|===
+| Kind | Use
+
+| `publication` | Books and long documents published elsewhere on the domain. These drive `/publications/` (title, subtitle, description, `meta` chips, `links`, `group`).
+| `wordpress` | Posts imported from, or cross-posted to, WordPress.
+| `smugmug` | Albums and galleries used as media sources.
+| `repo` | Repositories whose documentation feeds the site.
+| `app` | Publicly exposed apps.
+| `document`, `external` | Anything else worth tracking (résumé, portal, talks).
+|===
+
+Content links back with `:source: <id>`; `gw check` flags sources that are missing from the
+registry. Edit with `gw registry list|show|put|remove`, the UI, or the MCP tools.
+
+== Ideas: what to curate next
+
+`site/ideas.yaml` is the backlog of things worth sharing. Each idea has a status:
+
+`idea` → `planned` → `drafting` → `review` → `published` (or `dropped`)
+
+[source,console]
+----
+gw idea add "Router sled write-up" --area woodworking --kind update --source ~/photos/sled
+gw idea list --status planned
+gw idea set 7 drafting
+gw idea link 7 projects/workbench/updates/router-sled
+----
+
+The `suggest-post` skill adds ideas when you finish notable work elsewhere, and the
+`gitwebsite-curate` skill reviews the list with you.

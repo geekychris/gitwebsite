@@ -1,0 +1,25 @@
+[workspace]
+resolver = "2"
+members = ["crates/gw-core", "crates/gw", "app/src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Chris Collins"]
+
+[workspace.dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+chrono = { version = "0.4", features = ["serde"] }
+walkdir = "2"
+tera = "1"
+regex = "1"
+sha2 = "0.10"
+hex = "0.4"
+tokio = { version = "1", features = ["full"] }
+axum = "0.8"
+clap = { version = "4", features = ["derive"] }
+toml = "0.8"

@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% import "macros.html" as m %}
+{% block main %}
+<section class="wrap block page-top">
+  <p class="eyebrow"><a href="/areas/">Areas</a>{% for c in crumbs %} / <a href="{{ c.url }}">{{ c.title }}</a>{% endfor %}</p>
+  <h1>{{ area.title }}</h1>
+  {% if area.description %}<p class="lede">{{ area.description }}</p>{% endif %}
+  {% if area.children %}<p class="chips">{% for c in area.children %}<a class="chip" href="{{ c.url }}">{{ c.title }} <span class="count">{{ c.count }}</span></a>{% endfor %}</p>{% endif %}
+  {% if entries %}<div class="grid">{% for v in entries %}{{ m::card(v=v) }}{% endfor %}</div>
+  {% else %}<p class="empty">Nothing here yet.</p>{% endif %}
+</section>
+{% endblock %}

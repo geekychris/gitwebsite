@@ -1,0 +1,49 @@
+= Templates and layouts
+:toc:
+
+Templates are Tera (Jinja-like) files. Every page extends `base.html`.
+
+The default theme is built into gitwebsite (`crates/gw-core/theme/`): its templates and the
+assets they use (`css/site.css`, `js/site.js`, the playground scripts, `tools/tools.js` and
+`tools.css`, `images/favicon.svg`). A site needs no templates of its own. A file in the site's
+`templates/` replaces the built-in template of the same name, and a file in its `static/`
+replaces the built-in asset at the same path, so a site can change one template and keep the
+rest. `gw init` copies the whole theme into a new site (unless `--no-theme-copy`) so it is easy
+to find and edit; delete a copied file to go back to the built-in one.
+
+[cols="1,3",options="header"]
+|===
+| Template | Renders
+
+| `home.html` | `/` — the home page; `content/pages/home.adoc` supplies the intro text
+| `page.html` | Standing pages
+| `article.html` | Articles and project updates
+| `project.html` | Project pages with their update timeline
+| `app.html`, `playground.html` | Lab pages
+| `list.html` | `/articles/`, `/projects/`, tag pages
+| `areas.html`, `area.html` | The area tree and each area
+| `lab.html`, `publications.html`, `404.html` | Their pages
+| `feed.xml`, `sitemap.xml` | Feed and sitemap
+| `macros.html` | `card`, `row`, `area_tree` — shared building blocks
+|===
+
+== What templates can use
+
+Every page: `site` (title, tagline, base_url, author, description, links), `nav`, `page_path`,
+`page_title`, `noindex`, `areas_tree`, `build_year`.
+
+Item pages add `item`, and listings add `entries`, each an item view with: `id`, `kind`,
+`kind_label`, `title`, `url`, `slug`, `date_human`, `date_iso`, `updated_human`, `summary`,
+`hero_url`, `area_links` (path, title, url), `tags`, `project_title`, `project_url`, `repo`,
+`app_url`, `embed`, `featured`, `reading_minutes`, `html` (the rendered body), and `attrs`
+(every header attribute, for custom fields).
+
+Extra context: home gets `featured`, `posts` (latest six), `projects`, `apps`; projects get
+`updates`; posts get `related`; area pages get `area` and `crumbs`; the Lab gets `apps` and
+`playgrounds`; publications gets `groups`.
+
+== Changing the look
+
+Styles are in `site/static/css/site.css`, built on CSS custom properties at the top of the
+file (colours, radius, widths, fonts) with a dark-mode block. Behaviour (search, code
+highlighting, playgrounds) is in `site/static/js/site.js`.

@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% import "macros.html" as m %}
+{% block body_class %}home{% endblock %}
+{% block main %}
+<section class="hero">
+  <div class="wrap">
+    <h1>{{ site.title }}</h1>
+    <p class="tagline">{{ site.tagline }}</p>
+    {% if item.html %}<div class="hero-intro prose">{{ item.html | safe }}</div>{% endif %}
+  </div>
+</section>
+
+{% if featured %}
+<section class="wrap block">
+  <h2 class="section-title">Featured</h2>
+  <div class="grid">{% for v in featured %}{{ m::card(v=v) }}{% endfor %}</div>
+</section>
+{% endif %}
+
+<section class="wrap block">
+  <div class="section-head"><h2 class="section-title">Latest writing</h2><a href="/articles/">All articles →</a></div>
+  {% if posts %}<div class="grid">{% for v in posts %}{{ m::card(v=v) }}{% endfor %}</div>
+  {% else %}<p class="empty">Nothing published yet.</p>{% endif %}
+</section>
+
+{% if projects %}
+<section class="wrap block">
+  <div class="section-head"><h2 class="section-title">Projects</h2><a href="/projects/">All projects →</a></div>
+  <div class="grid">{% for v in projects | slice(end=6) %}{{ m::card(v=v) }}{% endfor %}</div>
+</section>
+{% endif %}
+
+<section class="wrap block">
+  <div class="section-head"><h2 class="section-title">Areas</h2><a href="/areas/">Browse all →</a></div>
+  <div class="area-grid">
+  {% for a in areas_tree %}
+    <a class="area-card" href="{{ a.url }}"><strong>{{ a.title }}</strong><span>{{ a.description }}</span>
+      <em>{% for c in a.children %}{{ c.title }}{% if not loop.last %} · {% endif %}{% endfor %}</em></a>
+  {% endfor %}
+  </div>
+</section>
+
+{% if tools %}
+<section class="wrap block">
+  <div class="section-head"><h2 class="section-title">Tools</h2><a href="/tools/">All {{ tools | length }} tools →</a></div>
+  <div class="tools-grid">{% for t in tools | slice(end=8) %}<a class="tool-card" href="{{ t.url }}"><strong>{{ t.title }}</strong><span>{{ t.summary }}</span></a>{% endfor %}</div>
+</section>
+{% endif %}
+
+{% if apps %}
+<section class="wrap block">
+  <div class="section-head"><h2 class="section-title">Lab</h2><a href="/lab/">Apps and playgrounds →</a></div>
+  <div class="grid">{% for v in apps %}{{ m::card(v=v) }}{% endfor %}</div>
+</section>
+{% endif %}
+{% endblock %}

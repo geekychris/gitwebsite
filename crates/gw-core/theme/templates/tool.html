@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block description %}{{ item.summary | default(value=site.description) }}{% endblock %}
+{% block body_class %}tool-page{% endblock %}
+{% block main %}
+<section class="wrap tool-wrap">
+  <header class="tool-head">
+    <p class="eyebrow"><a href="/tools/">Tools</a>{% if item.attrs.category %} · {{ item.attrs.category }}{% endif %}</p>
+    <h1>{{ item.title }}</h1>
+    {% if item.summary %}<p class="lede">{{ item.summary }}</p>{% endif %}
+    <div class="tool-actions" data-tool-actions data-public-base="{{ site.base_url | trim_end_matches(pat='/') }}"></div>
+  </header>
+  <div class="tool-root" id="tool-root" data-tool="{{ item.attrs.tool | default(value=item.slug) }}">
+    <noscript><p class="empty">This tool runs in your browser and needs JavaScript.</p></noscript>
+  </div>
+  {% if item.html %}
+  <details class="tool-help"{% if item.attrs.help_open %} open{% endif %}>
+    <summary>How to use it</summary>
+    <div class="prose">{{ item.html | safe }}</div>
+  </details>
+  {% endif %}
+  <p class="tool-privacy">Runs entirely in your browser{% if item.attrs.network %} — network requests go only to the services named on this page{% else %}; nothing you type leaves this page{% endif %}.</p>
+</section>
+<link rel="stylesheet" href="/tools/tools.css">
+<script src="/tools/tools.js" defer></script>
+<script src="/tools/{{ item.attrs.tool | default(value=item.slug) }}.js" defer></script>
+{% endblock %}

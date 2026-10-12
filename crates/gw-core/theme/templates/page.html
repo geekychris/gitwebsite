@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block description %}{{ item.summary | default(value=site.description) }}{% endblock %}
+{% block main %}
+<article class="wrap narrow doc">
+  <header class="doc-head"><h1>{{ item.title }}</h1>{% if item.summary %}<p class="lede">{{ item.summary }}</p>{% endif %}</header>
+  <div class="prose">{{ item.html | safe }}</div>
+</article>
+{% endblock %}

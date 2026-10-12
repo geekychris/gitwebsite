@@ -1,0 +1,391 @@
+//! MCP server over stdio (`gw mcp`): JSON-RPC 2.0, one message per line.
+//!
+//! Every tool maps onto a function in [`crate::ops`], so an AI client sees exactly what the
+//! CLI and REST API do. A fresh [`Site`] is opened per call, so edits made elsewhere (the CLI,
+//! the desktop app, a text editor) are always seen. Logging goes to stderr only; stdout
+//! carries protocol messages and nothing else.
+
+use crate::{enhance, ops, stories};
+use anyhow::{bail, Context, Result};
+use gw_core::media::Media;
+use gw_core::registry::Entry;
+use gw_core::Site;
+use serde_json::{json, Value};
+use std::io::{BufRead, Write};
+use std::path::PathBuf;
+
+const SUPPORTED: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
+
+/// Content conventions, repeated in tool descriptions so a client can write correct posts.
+const CONVENTIONS: &str = "Content is AsciiDoc. A file starts with `= Title` then header attributes \
+(one per line, `:name: value`) until the first blank line: :type: (page|article|project|update|app|playground|tool), \
+:date: YYYY-MM-DD, :areas: comma-separated area paths or unique ids from list_areas (an item may sit in several), \
+:tags:, :project: <project slug> (for updates), :summary: one line for cards and feeds, :hero: media:<key> or \
+an image path/URL, :status: draft|published, :visibility: public|unlisted, :repo: URL, :url: (apps: where the app \
+runs), :embed: true (apps: embed in an iframe), :source: <registry id>, :featured: true. Images: \
+image::media:<key>[Alt text] for library media (add_media first), image::photo.jpg[] for files beside a bundle's \
+index.adoc, or image::https://...[] for external URLs; video::media:<key>[]. Runnable code: a block preceded by \
+[source.playground,javascript] (or python, html). New content is always created as a draft.";
+
+fn tools() -> Value {
+    let s = |props: Value, req: &[&str]| json!({"type": "object", "properties": props, "required": req});
+    let str_ = |d: &str| json!({"type": "string", "description": d});
+    let arr = |d: &str| json!({"type": "array", "items": {"type": "string"}, "description": d});
+    let kinds = json!({"type": "string", "enum": ["page", "article", "project", "update", "app", "playground", "tool"],
+        "description": "page: standalone page (/slug/). article: dated post (/articles/slug/). project: long-running work with updates (/projects/slug/). update: dated post belonging to a project (needs project). app: a publicly running app in the Lab (needs url). playground: page of runnable code in the Lab. tool: an interactive browser tool at /tools/slug/ whose UI is site/static/tools/<slug>.js (header :tool: script name, :category: one of the tools.categories ids in site.yaml)."});
+    let entry_schema = json!({"type": "object", "description": "Registry entry",
+        "properties": {
+            "id": str_("Stable id, e.g. pub-my-book or wordpress-123"),
+            "kind": str_("publication | repo | wordpress | smugmug | app | external | document"),
+            "title": str_("Title"), "subtitle": str_("Optional subtitle"), "url": str_("Where it lives"),
+            "description": str_("Paragraph describing it"),
+            "origin": str_("Source of truth: repo URL, local path, WordPress post id, album key"),
+            "links": {"type": "array", "items": {"type": "object", "properties": {
+                "label": {"type": "string"}, "url": {"type": "string"}, "note": {"type": "string"}, "primary": {"type": "boolean"}},
+                "required": ["label", "url"]}},
+            "meta": arr("Short facts shown as chips, e.g. 'October 2026', 'Version 0.1'"),
+            "areas": arr("Area paths"), "group": str_("Heading on the publications page, e.g. Books, Strategy"),
+            "visibility": {"type": "string", "enum": ["public", "unlisted"]},
+            "added": str_("YYYY-MM-DD"), "content": str_("Content item id describing this entry, if any")},
+        "required": ["id", "kind", "title"]});
+    json!([
+        {"name": "site_info", "description": "The site's identity, navigation, publish target, and where its files are. Call first to orient.",
+         "inputSchema": s(json!({}), &[])},
+        {"name": "list_areas", "description": "The information architecture: every area as path (e.g. making/woodworking), id, title, description. Use these paths in :areas:.",
+         "inputSchema": s(json!({}), &[])},
+        {"name": "list_content", "description": "List content items (newest first), optionally filtered. Returns id, kind, title, url, date, areas, tags, draft, path.",
+         "inputSchema": s(json!({"kind": kinds.clone(), "area": str_("Area path or id; includes sub-areas"), "tag": str_("Tag"),
+            "drafts_only": {"type": "boolean", "description": "Only drafts"}}), &[])},
+        {"name": "get_content", "description": "One item with its full AsciiDoc source (source_text). id may be the item id, slug, or URL.",
+         "inputSchema": s(json!({"id": str_("Item id, slug, or URL")}), &["id"])},
+        {"name": "create_content", "description": format!("Create a new draft item. Returns its id and file path. {CONVENTIONS}"),
+         "inputSchema": s(json!({"kind": kinds, "title": str_("Title"), "areas": arr("Area paths or ids from list_areas"),
+            "tags": arr("Tags"), "project": str_("Project slug (required for kind=update)"), "summary": str_("One-line summary"),
+            "repo": str_("Repository URL"), "url": str_("For apps: where the app runs"),
+            "body": str_("AsciiDoc body after the header (no title or attributes). Omit for a template body."),
+            "bundle": {"type": "boolean", "description": "Create a directory (slug/index.adoc) so images can sit beside the text"}}),
+            &["kind", "title"])},
+        {"name": "update_content_source", "description": format!("Replace an item's entire AsciiDoc source (header and body). Validated before saving; a bad header is rejected and the file left unchanged. Get the current text with get_content first. {CONVENTIONS}"),
+         "inputSchema": s(json!({"id": str_("Item id, slug, or URL"), "text": str_("Complete new AsciiDoc source starting with `= Title`")}), &["id", "text"])},
+        {"name": "set_status", "description": "Mark an item draft or published. Published items go live at the next publish_site.",
+         "inputSchema": s(json!({"id": str_("Item id, slug, or URL"), "status": {"type": "string", "enum": ["draft", "published"]}}), &["id", "status"])},
+        {"name": "check_site", "description": "Validate content: headers parse, areas exist, update projects exist, media keys resolve, registry sources exist, apps have a url.",
+         "inputSchema": s(json!({}), &[])},
+        {"name": "build_site", "description": "Build the static site into dist/. Set drafts=true for a local preview that includes drafts. Does not publish.",
+         "inputSchema": s(json!({"drafts": {"type": "boolean"}}), &[])},
+        {"name": "publish_plan", "description": "Build without drafts and report what publishing would add, update, and remove in the GitHub Pages repo. Changes nothing. Show this to the user before publish_site.",
+         "inputSchema": s(json!({}), &[])},
+        {"name": "publish_site", "description": "Build without drafts, copy into the GitHub Pages repo, commit, and (unless push=false) push — this UPDATES THE LIVE PUBLIC WEBSITE. Always call publish_plan, show the user the changes, and get their explicit confirmation first; then pass confirm=true.",
+         "inputSchema": s(json!({"confirm": {"type": "boolean", "description": "Must be true: the user has explicitly approved publishing"},
+            "message": str_("Commit message"), "push": {"type": "boolean", "description": "Push to GitHub (default true)"}}), &["confirm"])},
+        {"name": "list_ideas", "description": "The curation list: ideas and work in progress (id, title, status, notes, areas, kind, source, content).",
+         "inputSchema": s(json!({"status": {"type": "string", "enum": ["idea", "planned", "drafting", "review", "published", "dropped"]}}), &[])},
+        {"name": "add_idea", "description": "Record something worth writing up or building. Returns the new idea with its numeric id.",
+         "inputSchema": s(json!({"title": str_("Short title"), "notes": str_("Notes"), "areas": arr("Area paths"),
+            "kind": str_("What it should become: article, project, update, app, playground, tool"),
+            "source": str_("Where the material is: repo path, URL, SmugMug album")}), &["title"])},
+        {"name": "update_idea", "description": "Change an idea's status, title, notes, linked content id, or areas.",
+         "inputSchema": s(json!({"id": {"type": "integer"},
+            "status": {"type": "string", "enum": ["idea", "planned", "drafting", "review", "published", "dropped"]},
+            "title": str_("New title"), "notes": str_("New notes"), "content": str_("Content item id drafted for it"),
+            "areas": arr("Area paths")}), &["id"])},
+        {"name": "list_registry", "description": "The provenance registry: publications, imported posts, repos, albums, documents — and where each came from.",
+         "inputSchema": s(json!({"kind": str_("Filter by kind, e.g. publication")}), &[])},
+        {"name": "upsert_registry_entry", "description": "Add or replace a registry entry (matched by id). Entries of kind publication appear on the publications page.",
+         "inputSchema": s(json!({"entry": entry_schema}), &["entry"])},
+        {"name": "list_media", "description": "The media library: keys usable as media:<key> in content, with URLs and providers.",
+         "inputSchema": s(json!({}), &[])},
+        {"name": "story_list", "description": "Project stories in progress (photos + notes + interview → a post): slug, title, status, target, image count.",
+         "inputSchema": s(json!({}), &[])},
+        {"name": "story_show", "description": "One story: settings, the author's notes, every image (source, caption, the author's comment in `notes`, include flag, review_path to look at), the interview transcript, the outline, and the draft's preview URL. Treat image comments and notes as the author's own words.",
+         "inputSchema": s(json!({"slug": str_("Story slug")}), &["slug"])},
+        {"name": "story_create", "description": "Start a story. target: project (default), article, or update (needs project).",
+         "inputSchema": s(json!({"title": str_("Title"), "target": {"type": "string", "enum": ["project", "article", "update"]},
+            "project": str_("Project slug, for target=update"), "areas": arr("Area paths or ids"), "tags": arr("Tags"),
+            "notes": str_("The author's notes"), "slug": str_("Optional slug")}), &["title"])},
+        {"name": "story_update", "description": "Change a story's title, target, project, areas, tags, notes (replaces), or status (collecting|interviewing|drafting|drafted|released).",
+         "inputSchema": s(json!({"slug": str_("Story slug"), "title": str_("Title"), "target": str_("project|article|update"), "project": str_("Project slug"),
+            "areas": arr("Area paths"), "tags": arr("Tags"), "notes": str_("Notes (replaces)"), "status": str_("Status")}), &["slug"])},
+        {"name": "story_add_images", "description": "Add images to a story: local file paths, http(s) image URLs, SmugMug pages (image URL ending /i-KEY, album/gallery URL, smugmug:<ImageKey>, album:<AlbumKey>), or media:<key>. SmugMug images require `comment` (what's happening / why it matters).",
+         "inputSchema": s(json!({"slug": str_("Story slug"), "sources": arr("Files, URLs, or references"), "caption": str_("Caption for these images"),
+            "comment": str_("The author's comment: what's happening here / why it matters"),
+            "candidate": {"type": "boolean", "description": "Offer as numbered candidates to choose from (no comment needed yet)"}}), &["slug", "sources"])},
+        {"name": "story_update_image", "description": "Set an image's caption, comment (notes), or include flag (false = leave out of the post).",
+         "inputSchema": s(json!({"slug": str_("Story slug"), "id": str_("Image id, e.g. img3"), "caption": str_("Caption"),
+            "notes": str_("Comment"), "include": {"type": "boolean"}}), &["slug", "id"])},
+        {"name": "story_remove_image", "description": "Remove an image from a story.",
+         "inputSchema": s(json!({"slug": str_("Story slug"), "id": str_("Image id")}), &["slug", "id"])},
+        {"name": "story_reorder", "description": "Put a story's images in this order (unlisted ids follow).",
+         "inputSchema": s(json!({"slug": str_("Story slug"), "ids": arr("Image ids in order")}), &["slug", "ids"])},
+        {"name": "story_note", "description": "Append to a story's notes (or replace=true).",
+         "inputSchema": s(json!({"slug": str_("Story slug"), "text": str_("Text"), "replace": {"type": "boolean"}}), &["slug", "text"])},
+        {"name": "story_qa", "description": "Record one interview question and the author's answer (verbatim or lightly tidied) in the story's transcript. Call after every answer.",
+         "inputSchema": s(json!({"slug": str_("Story slug"), "q": str_("Question asked"), "a": str_("The author's answer")}), &["slug", "q", "a"])},
+        {"name": "story_outline", "description": "Save the agreed outline (Markdown): sections, which images go where, title, summary, areas, tags.",
+         "inputSchema": s(json!({"slug": str_("Story slug"), "text": str_("Outline")}), &["slug", "text"])},
+        {"name": "story_draft", "description": format!("Write the story's post (a draft) from complete AsciiDoc that refers to the story's images as image::story:<id>[Alt text] (and :hero: story:<id>). Local photos are copied in at web size without EXIF/GPS; SmugMug photos become media keys. Missing :type:, :date:, :status: draft, :areas:, :tags: are filled from the story. Rebuilds the preview and returns preview_url. For an enhancement (story_enhance) the text is saved as a proposal the author reviews in the app; the post is not changed. {CONVENTIONS}"),
+         "inputSchema": s(json!({"slug": str_("Story slug"), "text": str_("Complete AsciiDoc starting with `= Title`"),
+            "preview": {"type": "boolean", "description": "Rebuild the preview (default true)"}}), &["slug", "text"])},
+        {"name": "story_review_images", "description": "Make sure every image in a story has a review thumbnail on disk; returns each image's local `path` to look at, with caption and the author's comment.",
+         "inputSchema": s(json!({"slug": str_("Story slug")}), &["slug"])},
+        {"name": "smugmug_albums", "description": "The authorised user's SmugMug albums (name, album_key, web URL, image count). Read-only.",
+         "inputSchema": s(json!({}), &[])},
+        {"name": "smugmug_browse", "description": "List what is on a SmugMug page: an album's images (paged: start, count), a folder's albums, or one image. Accepts album/gallery/folder/image URLs (custom domains too) or an AlbumKey. Read-only.",
+         "inputSchema": s(json!({"target": str_("SmugMug URL or AlbumKey"), "start": {"type": "integer"}, "count": {"type": "integer"}}), &["target"])},
+        {"name": "story_smugmug_pick", "description": "Add, update, or remove SmugMug images in a story, as the app's picker does. Every kept pick needs a non-empty comment from the author.",
+         "inputSchema": s(json!({"slug": str_("Story slug"), "picks": {"type": "array", "items": {"type": "object", "properties": {
+            "image_key": {"type": "string"}, "album_key": {"type": "string"}, "caption": {"type": "string"},
+            "comment": {"type": "string"}, "remove": {"type": "boolean"}}, "required": ["image_key"]}}}), &["slug", "picks"])},
+        {"name": "story_add_dir", "description": "Offer every photo in local folders as numbered candidates (left where they are until selected; videos reported, not added). Then show a contact sheet and let the author choose by number.",
+         "inputSchema": s(json!({"slug": str_("Story slug"), "dirs": arr("Absolute folder paths"), "recursive": {"type": "boolean"},
+            "since": str_("Only photos taken on/after YYYY-MM-DD"), "limit": {"type": "integer", "description": "At most N per folder"}}), &["slug", "dirs"])},
+        {"name": "story_add_smugmug", "description": "Offer the photos on SmugMug pages (album/gallery/photo URLs, album:<AlbumKey>) as numbered candidates. Read-only on SmugMug.",
+         "inputSchema": s(json!({"slug": str_("Story slug"), "targets": arr("SmugMug URLs or album:<key>")}), &["slug", "targets"])},
+        {"name": "story_contact_sheet", "description": "Render a numbered contact sheet JPEG (candidates by default) and return its `path` (open it with your image viewer/Read tool) and the number→image list. The author picks by number.",
+         "inputSchema": s(json!({"slug": str_("Story slug"), "which": {"type": "string", "enum": ["candidates", "selected", "rejected", "all"]},
+            "page": {"type": "integer"}, "per_page": {"type": "integer"}}), &["slug"])},
+        {"name": "story_select", "description": "Select photos by number list (\"3,7-9,12\"), ids, or \"all\". Every selected photo needs the author's comment: pass `comment` (applies to all) or set them with story_comment. Returns which still need one.",
+         "inputSchema": s(json!({"slug": str_("Story slug"), "refs": str_("Numbers/ranges/ids"), "comment": str_("The author's comment")}), &["slug", "refs"])},
+        {"name": "story_unselect", "description": "Move photos back to the candidates.",
+         "inputSchema": s(json!({"slug": str_("Story slug"), "refs": str_("Numbers/ranges/ids")}), &["slug", "refs"])},
+        {"name": "story_reject", "description": "Reject photos (kept, marked rejected).",
+         "inputSchema": s(json!({"slug": str_("Story slug"), "refs": str_("Numbers/ranges/ids")}), &["slug", "refs"])},
+        {"name": "story_comment", "description": "Set one photo's comment (the author's words: what's happening, why it matters). `ref` is a number (#7) or id.",
+         "inputSchema": s(json!({"slug": str_("Story slug"), "ref": str_("Number or id"), "text": str_("Comment")}), &["slug", "ref", "text"])},
+        {"name": "story_narrative", "description": "The story so far, in the author's words: append (default) or replace (append=false). Pass `base` (narrative_rev you read) when replacing to avoid overwriting edits made in the app.",
+         "inputSchema": s(json!({"slug": str_("Story slug"), "text": str_("Text"), "append": {"type": "boolean"}, "base": {"type": "integer"}}), &["slug", "text"])},
+        {"name": "story_ask", "description": "Record a question you are waiting on. The author can answer in the chat (then call story_answer) or in the gitwebsite app; check story_pending / story_changes before the next round.",
+         "inputSchema": s(json!({"slug": str_("Story slug"), "q": str_("Question")}), &["slug", "q"])},
+        {"name": "story_answer", "description": "Answer a pending question (the oldest, or `id`) with the author's words; records it in the transcript.",
+         "inputSchema": s(json!({"slug": str_("Story slug"), "a": str_("The author's answer"), "id": {"type": "integer"}}), &["slug", "a"])},
+        {"name": "story_pending", "description": "Questions waiting for an answer.",
+         "inputSchema": s(json!({"slug": str_("Story slug")}), &["slug"])},
+        {"name": "story_changes", "description": "What changed after revision `since` — who (app, cli, mcp), what, when. Call before each interview round to pick up edits and answers made in the app.",
+         "inputSchema": s(json!({"slug": str_("Story slug"), "since": {"type": "integer"}}), &["slug"])},
+        {"name": "story_wait", "description": "Wait for the author: returns when something changes in the story elsewhere (e.g. an answer typed in the app), or after `timeout` seconds (default 240, max 600). With answer_only=true, returns once no question is pending or an answer arrives. Loop on it while waiting for answers.",
+         "inputSchema": s(json!({"slug": str_("Story slug"), "since": {"type": "integer", "description": "Revision to wait from (default: now)"},
+            "timeout": {"type": "integer"}, "answer_only": {"type": "boolean"}}), &["slug"])},
+        {"name": "story_enhance", "description": "Start (or reopen) an enhancement: rework an existing post (article, project, update, page…) with the author. Creates a story `enhance-<slug>` tied to the item, with the item's title/areas/tags, the code repository behind it (url + local checkout, when found), and the standard key questions the author can answer in the app. Then follow the enhance-post skill.",
+         "inputSchema": s(json!({"item": str_("Content item id, slug, or URL")}), &["item"])},
+        {"name": "story_context", "description": "Everything for an enhancement: the post's current AsciiDoc, the author's key-question answers, narrative, notes and interview, pending questions, any proposal, selected photos, and the repository (url, local path, README, last 40 commits, first commit, top-level files). Read the repo further with your own tools.",
+         "inputSchema": s(json!({"slug": str_("Story slug")}), &["slug"])},
+        {"name": "story_key_answers", "description": "Save the author's answers to the standard key questions (ids: inspiration, why, how, hardest, learned, next, audience). Changed answers are added to the transcript.",
+         "inputSchema": s(json!({"slug": str_("Story slug"), "answers": {"type": "object", "additionalProperties": {"type": "string"}, "description": "question id → the author's answer"}}), &["slug", "answers"])},
+        {"name": "story_set_repo", "description": "Point an enhancement at a repository: its URL and/or a local checkout path (empty path: look for a checkout).",
+         "inputSchema": s(json!({"slug": str_("Story slug"), "url": str_("Repository URL"), "path": str_("Local checkout")}), &["slug"])},
+        {"name": "story_proposal", "description": "An enhancement's proposal: the revised text, the current post, and a line diff (op ' ', '-', '+').",
+         "inputSchema": s(json!({"slug": str_("Story slug")}), &["slug"])},
+        {"name": "story_accept", "description": "Write an enhancement's proposal over the post (keeps its path, :status:, :date:, and attributes the proposal omits; sets :updated:). ONLY when the author has explicitly said to accept it in this conversation; normally they accept in the app. Pass confirm=true.",
+         "inputSchema": s(json!({"slug": str_("Story slug"), "confirm": {"type": "boolean"}}), &["slug", "confirm"])},
+        {"name": "story_discard", "description": "Throw away an enhancement's proposal (only when the author asks).",
+         "inputSchema": s(json!({"slug": str_("Story slug")}), &["slug"])},
+        {"name": "story_request_changes", "description": "Record the author's feedback on the proposal (what to change); revise and story_draft again.",
+         "inputSchema": s(json!({"slug": str_("Story slug"), "text": str_("The author's feedback")}), &["slug", "text"])},
+        {"name": "add_media", "description": "Register an image or video URL (or site path like /images/x.jpg) under a key, for use as image::media:<key>[] or video::media:<key>[].",
+         "inputSchema": s(json!({"key": str_("Letters, digits, - _ ."), "url": str_("Absolute URL or site path"),
+            "kind": {"type": "string", "enum": ["image", "video"]}, "alt": str_("Alt text"), "caption": str_("Caption")}), &["key", "url"])},
+    ])
+}
+
+fn sv<'a>(a: &'a Value, k: &str) -> Option<&'a str> {
+    a.get(k).and_then(|v| v.as_str())
+}
+fn req<'a>(a: &'a Value, k: &str) -> Result<&'a str> {
+    sv(a, k).with_context(|| format!("missing string argument `{k}`"))
+}
+
+fn call(root: &PathBuf, name: &str, a: &Value) -> Result<Value> {
+    let site = Site::open(Some(root))?;
+    match name {
+        "site_info" => Ok(json!({
+            "root": site.root.display().to_string(),
+            "content_dir": site.content_dir().display().to_string(),
+            "site": site.config.site, "nav": site.config.nav,
+            "publish": site.config.publish, "sources": site.config.sources,
+            "conventions": CONVENTIONS,
+        })),
+        "list_areas" => ops::areas(&site),
+        "list_content" => ops::list(&site, &serde_json::from_value(a.clone()).context("bad arguments")?),
+        "get_content" => ops::show(&site, req(a, "id")?),
+        "create_content" => ops::new_item(&site, &serde_json::from_value(a.clone()).context("bad arguments")?),
+        "update_content_source" => ops::write_source(&site, req(a, "id")?, req(a, "text")?),
+        "set_status" => ops::set_status(&site, req(a, "id")?, req(a, "status")?),
+        "check_site" => ops::check(&site),
+        "build_site" => ops::do_build(&site, a.get("drafts").and_then(|v| v.as_bool()).unwrap_or(false)),
+        "publish_plan" => ops::publish_plan(&site),
+        "publish_site" => {
+            if a.get("confirm").and_then(|v| v.as_bool()) != Some(true) {
+                bail!("refused: publishing updates the live website. Show the user publish_plan, get explicit confirmation, then call again with confirm=true");
+            }
+            ops::publish_site(&site, sv(a, "message"), a.get("push").and_then(|v| v.as_bool()).unwrap_or(true))
+        }
+        "list_ideas" => ops::ideas_list(&site, sv(a, "status")),
+        "add_idea" => ops::idea_add(&site, &serde_json::from_value(a.clone()).context("bad arguments")?),
+        "update_idea" => {
+            let id = a.get("id").and_then(|v| v.as_u64()).context("missing integer argument `id`")? as u32;
+            let u: ops::IdeaUpdate = serde_json::from_value(a.clone()).context("bad arguments")?;
+            ops::idea_update(&site, id, &u)
+        }
+        "list_registry" => ops::registry_list(&site, sv(a, "kind")),
+        "upsert_registry_entry" => {
+            let e: Entry = serde_json::from_value(a.get("entry").cloned().context("missing `entry`")?).context("bad entry")?;
+            ops::registry_upsert(&site, e)
+        }
+        "list_media" => ops::media_list(&site),
+        "add_media" => {
+            let url = req(a, "url")?.to_string();
+            let provider = if url.starts_with('/') { "local" } else if url.contains("smugmug") { "smugmug" } else { "external" };
+            ops::media_add(&site, req(a, "key")?, Media {
+                url,
+                kind: sv(a, "kind").unwrap_or("image").into(),
+                provider: provider.into(),
+                thumb: String::new(),
+                alt: sv(a, "alt").unwrap_or("").into(),
+                caption: sv(a, "caption").unwrap_or("").into(),
+                ids: Default::default(),
+            })
+        }
+        "story_list" => stories::list(&site),
+        "story_show" => stories::show(&site, req(a, "slug")?),
+        "story_create" => stories::create(&site, &serde_json::from_value(a.clone()).context("bad arguments")?),
+        "story_update" => {
+            let mut u: gw_core::story::StoryUpdate = serde_json::from_value(a.clone()).context("bad arguments")?;
+            if u.project.is_none() && a.get("project").is_some() { u.project = Some(String::new()); }
+            stories::update(&site, req(a, "slug")?, &u)
+        }
+        "story_add_images" => stories::add(&site, req(a, "slug")?, &serde_json::from_value(a.clone()).context("bad arguments")?),
+        "story_update_image" => stories::image_update(&site, req(a, "slug")?, req(a, "id")?, &serde_json::from_value(a.clone()).context("bad arguments")?),
+        "story_remove_image" => stories::image_remove(&site, req(a, "slug")?, req(a, "id")?),
+        "story_reorder" => {
+            let ids: Vec<String> = serde_json::from_value(a.get("ids").cloned().context("missing `ids`")?).context("bad ids")?;
+            stories::reorder(&site, req(a, "slug")?, &ids)
+        }
+        "story_note" => stories::note(&site, req(a, "slug")?, req(a, "text")?, a.get("replace").and_then(|v| v.as_bool()).unwrap_or(false)),
+        "story_qa" => stories::qa(&site, req(a, "slug")?, req(a, "q")?, req(a, "a")?),
+        "story_outline" => stories::outline(&site, req(a, "slug")?, req(a, "text")?),
+        "story_draft" => stories::draft(&site, req(a, "slug")?, req(a, "text")?, a.get("preview").and_then(|v| v.as_bool()).unwrap_or(true)),
+        "story_review_images" => stories::review_images(&site, req(a, "slug")?),
+        "smugmug_albums" => stories::smugmug_albums(),
+        "smugmug_browse" => stories::smugmug_browse(
+            req(a, "target")?,
+            a.get("start").and_then(|v| v.as_u64()).unwrap_or(1) as usize,
+            a.get("count").and_then(|v| v.as_u64()).unwrap_or(100) as usize,
+        ),
+        "story_add_dir" => stories::add_dir(&site, req(a, "slug")?, &serde_json::from_value(a.clone()).context("bad arguments")?),
+        "story_add_smugmug" => {
+            let targets: Vec<String> = serde_json::from_value(a.get("targets").cloned().context("missing `targets`")?).context("bad targets")?;
+            stories::add(&site, req(a, "slug")?, &stories::AddArgs { sources: targets, caption: None, comment: None, candidate: true })
+        }
+        "story_contact_sheet" => stories::contact_sheet(&site, req(a, "slug")?, sv(a, "which").unwrap_or("candidates"),
+            a.get("page").and_then(|v| v.as_u64()).unwrap_or(1) as usize, a.get("per_page").and_then(|v| v.as_u64()).unwrap_or(24) as usize),
+        "story_select" => stories::select(&site, req(a, "slug")?, req(a, "refs")?, sv(a, "comment")),
+        "story_unselect" => stories::set_state(&site, req(a, "slug")?, req(a, "refs")?, "candidate"),
+        "story_reject" => stories::set_state(&site, req(a, "slug")?, req(a, "refs")?, "rejected"),
+        "story_comment" => stories::comment(&site, req(a, "slug")?, req(a, "ref")?, req(a, "text")?),
+        "story_narrative" => stories::narrative(&site, req(a, "slug")?, req(a, "text")?, a.get("append").and_then(|v| v.as_bool()).unwrap_or(true), a.get("base").and_then(|v| v.as_u64())),
+        "story_ask" => stories::ask(&site, req(a, "slug")?, req(a, "q")?),
+        "story_answer" => stories::answer(&site, req(a, "slug")?, a.get("id").and_then(|v| v.as_u64()).map(|v| v as u32), req(a, "a")?),
+        "story_pending" => stories::pending(&site, req(a, "slug")?),
+        "story_changes" => stories::changes(&site, req(a, "slug")?, a.get("since").and_then(|v| v.as_u64()).unwrap_or(0)),
+        "story_wait" => stories::wait(&site, req(a, "slug")?, a.get("since").and_then(|v| v.as_u64()),
+            a.get("timeout").and_then(|v| v.as_u64()).unwrap_or(240).min(600), a.get("answer_only").and_then(|v| v.as_bool()).unwrap_or(false)),
+        "story_enhance" => enhance::start(&site, req(a, "item")?),
+        "story_context" => enhance::context(&site, req(a, "slug")?),
+        "story_key_answers" => {
+            let m: std::collections::BTreeMap<String, String> = serde_json::from_value(a.get("answers").cloned().context("missing `answers`")?).context("answers must map ids to strings")?;
+            enhance::key_answers(&site, req(a, "slug")?, &m)
+        }
+        "story_set_repo" => enhance::set_repo(&site, req(a, "slug")?, sv(a, "url").unwrap_or(""), sv(a, "path")),
+        "story_proposal" => enhance::proposal(&site, req(a, "slug")?),
+        "story_accept" => {
+            if a.get("confirm").and_then(|v| v.as_bool()) != Some(true) {
+                bail!("refused: accepting rewrites the post. Only when the author has explicitly said so; then call again with confirm=true");
+            }
+            enhance::accept(&site, req(a, "slug")?)
+        }
+        "story_discard" => enhance::discard(&site, req(a, "slug")?),
+        "story_request_changes" => enhance::request_changes(&site, req(a, "slug")?, req(a, "text")?),
+        "story_smugmug_pick" => {
+            let picks: Vec<stories::Pick> = serde_json::from_value(a.get("picks").cloned().context("missing `picks`")?).context("bad picks")?;
+            stories::smugmug_pick(&site, req(a, "slug")?, &picks)
+        }
+        _ => bail!("unknown tool {name}"),
+    }
+}
+
+/// "Mona Octocat's website, “Octo's notes” (https://octocat.github.io)", from site.yaml.
+fn whose_site(root: &std::path::Path) -> String {
+    match Site::open(Some(root)) {
+        Ok(s) => {
+            let c = &s.config.site;
+            let host = c.base_url.trim_start_matches("https://").trim_start_matches("http://").trim_end_matches('/');
+            if c.author.is_empty() {
+                format!("the website “{}” ({host})", c.title)
+            } else {
+                format!("{}'s website, “{}” ({host})", c.author, c.title)
+            }
+        }
+        Err(_) => "the gitwebsite site".into(),
+    }
+}
+
+fn handle(root: &PathBuf, msg: &Value) -> Option<Value> {
+    let id = msg.get("id").cloned();
+    let method = msg.get("method").and_then(|m| m.as_str()).unwrap_or("");
+    let params = msg.get("params").cloned().unwrap_or(Value::Null);
+    let result: std::result::Result<Value, (i64, String)> = match method {
+        "initialize" => {
+            let asked = params.get("protocolVersion").and_then(|v| v.as_str()).unwrap_or("");
+            let v = if SUPPORTED.contains(&asked) { asked } else { SUPPORTED[0] };
+            Ok(json!({
+                "protocolVersion": v,
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "gitwebsite", "version": env!("CARGO_PKG_VERSION")},
+                "instructions": format!("Manage {}: content, areas, ideas, registry, media, project stories (photos + interview → post), enhancements of existing posts (story_enhance), build, and publish. Publishing updates the live site — always get the user's confirmation. {CONVENTIONS}", whose_site(root)),
+            }))
+        }
+        "ping" => Ok(json!({})),
+        "tools/list" => Ok(json!({"tools": tools()})),
+        "tools/call" => {
+            let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let args = params.get("arguments").cloned().unwrap_or(json!({}));
+            match call(root, name, &args) {
+                Ok(v) => Ok(json!({"content": [{"type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default()}], "isError": false})),
+                Err(e) => Ok(json!({"content": [{"type": "text", "text": format!("Error: {e:#}")}], "isError": true})),
+            }
+        }
+        m if m.starts_with("notifications/") => return None,
+        _ => Err((-32601, format!("method not found: {method}"))),
+    };
+    let id = id?; // notifications get no response
+    Some(match result {
+        Ok(r) => json!({"jsonrpc": "2.0", "id": id, "result": r}),
+        Err((code, message)) => json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}}),
+    })
+}
+
+pub fn run(site_root: PathBuf) -> Result<()> {
+    stories::set_actor("mcp");
+    eprintln!("gitwebsite MCP server: site {}", site_root.display());
+    let stdin = std::io::stdin();
+    let mut out = std::io::stdout().lock();
+    for line in stdin.lock().lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let reply = match serde_json::from_str::<Value>(&line) {
+            Ok(Value::Array(batch)) => {
+                let r: Vec<Value> = batch.iter().filter_map(|m| handle(&site_root, m)).collect();
+                if r.is_empty() { None } else { Some(Value::Array(r)) }
+            }
+            Ok(msg) => handle(&site_root, &msg),
+            Err(e) => Some(json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": format!("parse error: {e}")}})),
+        };
+        if let Some(r) = reply {
+            writeln!(out, "{}", serde_json::to_string(&r)?)?;
+            out.flush()?;
+        }
+    }
+    Ok(())
+}

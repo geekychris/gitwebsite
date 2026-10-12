@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The desktop app (Tauri) needs WebKitGTK on Linux; there CI covers the engine only.
+          - os: macos-latest
+            packages: --workspace
+          - os: ubuntu-latest
+            packages: -p gw-core -p gw
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+      - name: Asciidoctor (renders AsciiDoc during builds)
+        run: gem install asciidoctor
+      - name: Clippy
+        run: cargo clippy ${{ matrix.packages }} --all-targets
+      - name: Tests
+        run: cargo test ${{ matrix.packages }}
+      - name: A new site checks and builds
+        run: |
+          cargo build --release -p gw
+          ./target/release/gw init "$RUNNER_TEMP/site" --title "CI site" --author "CI" --base-url https://example.com
+          ./target/release/gw --site "$RUNNER_TEMP/site" check
+          ./target/release/gw --site "$RUNNER_TEMP/site" build

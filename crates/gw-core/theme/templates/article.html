@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% import "macros.html" as m %}
+{% block description %}{{ item.summary | default(value=site.description) }}{% endblock %}
+{% block og %}<meta property="og:type" content="article">{% if item.hero_url %}<meta property="og:image" content="{{ item.hero_url | safe }}">{% endif %}{% endblock %}
+{% block main %}
+<article class="wrap narrow doc">
+  <header class="doc-head">
+    <p class="eyebrow">{{ item.kind_label }}{% if item.project_title %} · <a href="{{ item.project_url }}">{{ item.project_title }}</a>{% endif %}</p>
+    <h1>{{ item.title }}</h1>
+    {% if item.summary %}<p class="lede">{{ item.summary }}</p>{% endif %}
+    <p class="meta"><time datetime="{{ item.date_iso }}">{{ item.date_human }}</time> · {{ item.reading_minutes }} min read
+      {% if item.updated_human %} · updated {{ item.updated_human }}{% endif %}
+      {% if item.repo %} · <a href="{{ item.repo }}">source</a>{% endif %}</p>
+    {% if item.area_links %}<p class="chips">{% for a in item.area_links %}<a class="chip" href="{{ a.url }}">{{ a.title }}</a>{% endfor %}</p>{% endif %}
+  </header>
+  {% if item.hero_url and not item.hero_in_body %}<figure class="doc-hero"><img src="{{ item.hero_url | safe }}" alt=""></figure>{% endif %}
+  <div class="prose">{{ item.html | safe }}</div>
+  {% if item.tags %}<p class="tags">{% for t in item.tags %}<a href="/tags/{{ t | slugify }}/">#{{ t }}</a>{% endfor %}</p>{% endif %}
+</article>
+{% if related %}
+<section class="wrap block"><h2 class="section-title">Related</h2>
+  <div class="grid">{% for v in related %}{{ m::card(v=v) }}{% endfor %}</div></section>
+{% endif %}
+{% endblock %}

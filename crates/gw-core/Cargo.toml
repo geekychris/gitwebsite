@@ -1,0 +1,23 @@
+[package]
+name = "gw-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "gitwebsite core: content model, information architecture, registry, build, publish"
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+chrono.workspace = true
+walkdir.workspace = true
+tera.workspace = true
+regex.workspace = true
+toml.workspace = true
+sha2.workspace = true
+hex.workspace = true
+# stories: read photos (orientation, size, EXIF date) and write web-sized copies without metadata
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "tiff"] }
+kamadak-exif = "0.6"
+ab_glyph = "0.2"

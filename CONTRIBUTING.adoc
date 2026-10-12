@@ -1,0 +1,13 @@
+= Contributing
+
+Thanks for helping. Issues and pull requests are welcome.
+
+* *Build and test*: `cargo test --workspace` and `cargo clippy --workspace`; CI runs both on
+  macOS and Linux. A change to the build should keep a fresh `gw init` site checking and
+  building with no warnings (there is a test for that).
+* *Style*: match the surrounding code — short doc comments that say why, plain names, no new
+  dependencies without a reason. The UI is plain JavaScript with no build step (`ui/`).
+* *The default theme* lives in `crates/gw-core/theme/`; sites override it, so keep templates
+  generic (no names, addresses, or wording that belongs to one site).
+* *Docs*: user-facing changes need a line in `docs/` (AsciiDoc).
+* *Commits*: one change per pull request, with a message that says what and why.

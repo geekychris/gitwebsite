@@ -1,0 +1,78 @@
+= Setting up
+:toc:
+
+== Install
+
+gitwebsite is built from source. You need Rust (stable), Ruby with Asciidoctor (`gem install
+asciidoctor`, used to render AsciiDoc), and for the desktop app the Tauri CLI (`cargo install
+tauri-cli`).
+
+[source,console]
+----
+git clone https://github.com/geekychris/gitwebsite && cd gitwebsite
+make install-gw        # gw → ~/.local/bin (put ~/.local/bin on your PATH)
+make install-skills    # Claude Code skills → ~/.claude/skills (optional)
+make install-app       # gitwebsite.app → ~/Applications (macOS, optional)
+----
+
+== Create a site
+
+[source,console]
+----
+gw init ~/sites/notes --title "My notes" --author "Mona Octocat" \
+    --pages-repo octocat/octocat.github.io --git
+cd ~/sites/notes
+gw serve --open        # the management app and a live preview
+gw new article "My first post" --area notes
+gw publish             # build and push to GitHub Pages
+----
+
+`gw init` writes `site.yaml` (title, author, address, navigation, areas, publish target), the
+empty stores (`registry.yaml`, `ideas.yaml`, `media.yaml`), the default theme, a home page, an
+About page, an example article and project, and a `.gitignore`. The address defaults to the one
+GitHub Pages gives the repository (`octocat/octocat.github.io` → `https://octocat.github.io`).
+Options: `--base-url`, `--tagline`, `--description`, `--branch`, `--pages-checkout <dir>`,
+`--no-theme-copy`, `--no-starter`, `--git` (make the folder a repository with a first commit),
+`--create-pages-repo` (create the Pages repository with `gh`), `--no-current`.
+
+Turn on GitHub Pages for the repository's branch in its settings on GitHub; `gw publish` clones
+it to `publish.pages_repo` the first time.
+
+In the desktop app, the first run opens the setup screen: open a folder that holds a
+`site.yaml`, or create a site with the same fields as `gw init`.
+
+== Several sites, and settings
+
+Your settings live in `~/.config/gitwebsite/config.toml` (`$XDG_CONFIG_HOME/gitwebsite`,
+`%APPDATA%\gitwebsite` on Windows, or `$GW_CONFIG_DIR`):
+
+[source,console]
+----
+gw config show                          # sites, the current one, and settings
+gw config add-site ~/sites/blog --current
+gw config use blog                      # by name or folder
+gw config remove blog                   # forgets it; files untouched
+gw config set repo-roots ~/code,~/src   # where Enhance looks for checkouts
+gw config set claude-bin /opt/homebrew/bin/claude
+----
+
+Every command finds its site the same way: `--site <dir>`, else `$GW_SITE`, else a `site.yaml`
+in the current folder or a parent (a `site/site.yaml` counts too), else the current site from the
+config. `gw site` shows which site that is.
+
+In the app, the *Sites* page lists your sites, opens or creates others, and sets the publish
+target; the menu at the foot of the sidebar switches between them.
+
+== Claude Code
+
+The MCP server gives Claude the site's tools (`gw mcp`); the skills teach it the workflows
+(writing, publishing, media, curation, project stories, enhancing posts).
+
+[source,console]
+----
+claude mcp add --scope user gitwebsite -- gw mcp
+make install-skills
+----
+
+The server reads the site's title, author, and address from `site.yaml`, so Claude knows whose
+site it is working on.

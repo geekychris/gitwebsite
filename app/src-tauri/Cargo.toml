@@ -1,0 +1,21 @@
+[package]
+name = "gitwebsite-app"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "gitwebsite desktop app: the management UI in a native window, with the server built in"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+gw = { path = "../../crates/gw" }
+gw-core = { path = "../../crates/gw-core" }
+serde_json = "1"
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder"] }

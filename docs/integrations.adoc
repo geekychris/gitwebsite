@@ -1,0 +1,69 @@
+= Integrations: SmugMug and WordPress
+:toc:
+
+Credentials are stored in the macOS Keychain (services `gitwebsite-smugmug` and
+`gitwebsite-wordpress`). The `auth` commands are interactive — run them yourself in a
+terminal; secrets are never echoed or logged.
+
+== SmugMug: hosting images and video
+
+SmugMug serves large photos and video from its CDN; the site refers to them through the media
+library as `media:<key>`.
+
+=== One-time setup
+
+. Get an API key and secret at https://api.smugmug.com/api/developer/apply.
+. Run `gw smugmug auth`: paste the key and secret, open the printed authorisation URL, approve
+  access, and paste back the six-digit code.
+. Check with `gw smugmug whoami`.
+
+=== Using it
+
+[source,console]
+----
+gw smugmug albums                                         # name, AlbumKey, address
+gw smugmug upload bench.jpg --album AbC123 --key bench-front --alt "The finished bench"
+gw smugmug import https://photos.smugmug.com/.../i-Xyz789 --key sled-overview
+gw smugmug sync-album AbC123 --prefix workbench           # workbench-1, workbench-2, ...
+----
+
+Each command records the item in `site/media.yaml` (CDN URL, thumbnail, image and album
+keys) and prints the snippet to paste:
+
+[source,asciidoc]
+----
+image::media:bench-front[The finished bench]
+video::media:sled-demo[width=100%]
+----
+
+== WordPress: import, then cross-post
+
+=== Importing existing posts
+
+Public posts can be imported without credentials. Each becomes a *draft* article, converted
+from HTML to AsciiDoc with pandoc, with a registry entry recording where it came from:
+
+[source,console]
+----
+gw wordpress import --from example.wordpress.com --dry-run      # see what would happen
+gw wordpress import --from example.wordpress.com                # import as drafts
+gw wordpress import --wxr export.xml                            # from a WordPress export file
+----
+
+Options: `--since YYYY-MM-DD`, `--status draft|published`, `--limit N`, `--download-images`
+(copy images into each post's bundle instead of linking to WordPress). Re-running skips posts
+already imported. Imported posts get `:source: wordpress-<host>-<id>`; areas are filled in
+where a WordPress category matches an area, and marked `// TODO areas` otherwise — review and
+`gw release` the ones to keep.
+
+=== Cross-posting new posts
+
+[source,console]
+----
+gw wordpress auth --host example.wordpress.com
+gw wordpress crosspost articles/router-sled                     # creates a WordPress draft
+gw wordpress crosspost articles/router-sled --status publish
+----
+
+The WordPress copy ends with "Originally published at …" linking back to this site, and the
+remote post is recorded in the registry. Only locally published items can be cross-posted.

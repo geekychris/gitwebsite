@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% import "macros.html" as m %}
+{% block main %}
+<section class="wrap narrow block page-top">
+  <h1>Areas</h1>
+  <p class="lede">How the site is organised. Everything can sit in more than one area; each area page includes its sub-areas.</p>
+  {{ m::area_tree(nodes=areas_tree) }}
+</section>
+{% endblock %}

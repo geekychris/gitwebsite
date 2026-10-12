@@ -1,0 +1,21 @@
+= gitwebsite
+:doctype: book
+:toc: left
+:toclevels: 2
+:sectnums:
+:leveloffset: +1
+
+gitwebsite builds, curates, and publishes a personal or project website from AsciiDoc kept in
+git: a Rust core with a CLI, a REST API and management UI, an MCP server for AI assistants, and
+a desktop app. Start with <<setup.adoc#,Setting up>>.
+
+include::setup.adoc[]
+include::architecture.adoc[]
+include::information-architecture.adoc[]
+include::authoring.adoc[]
+include::stories.adoc[]
+include::publishing.adoc[]
+include::registry-and-ideas.adoc[]
+include::interfaces.adoc[]
+include::integrations.adoc[]
+include::templates.adoc[]

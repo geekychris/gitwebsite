@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block description %}{{ item.summary | default(value=site.description) }}{% endblock %}
+{% block main %}
+<article class="wrap doc">
+  <header class="doc-head narrow-inner">
+    <p class="eyebrow"><a href="/lab/">Lab</a> · App</p>
+    <h1>{{ item.title }}</h1>
+    {% if item.summary %}<p class="lede">{{ item.summary }}</p>{% endif %}
+    <p class="actions"><a class="button" href="{{ item.app_url | safe }}" target="_blank" rel="noopener">Open the app ↗</a>
+      {% if item.repo %}<a class="button ghost" href="{{ item.repo }}">Source</a>{% endif %}</p>
+  </header>
+  {% if item.embed %}<div class="app-frame"><iframe src="{{ item.app_url | safe }}" title="{{ item.title }}" loading="lazy" allow="fullscreen; clipboard-write"></iframe></div>{% endif %}
+  <div class="prose narrow-inner">{{ item.html | safe }}</div>
+</article>
+{% endblock %}

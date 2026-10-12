@@ -1,0 +1,49 @@
+= Building, previewing, and publishing
+:toc:
+
+== Preview while writing
+
+[source,console]
+----
+gw serve --open          # management UI at http://127.0.0.1:8790/app/, preview at /preview/
+gw build --drafts        # or just build, including drafts, into site/dist/
+----
+
+== Check before publishing
+
+[source,console]
+----
+gw check                 # areas, dates, projects, media keys, registry sources
+gw list --drafts         # what is still a draft
+gw release <id>          # mark an item published
+----
+
+== Publish
+
+[source,console]
+----
+gw publish --dry-run     # build (no drafts) and list added / updated / removed files
+gw publish               # same, then asks for confirmation, commits, and pushes
+gw publish --no-push     # commit to the local Pages checkout only
+----
+
+Publishing updates the live site (the site's `base_url`). It:
+
+. builds without drafts;
+. pulls the Pages checkout (`publish.pages_repo`, cloned from `publish.remote` if missing);
+. copies every file in the new manifest, deletes files the *previous* manifest owned that are
+  no longer built, and leaves everything else alone;
+. refuses to write any path under `publish.preserve` (books, résumé, and other projects that
+  publish into the same repository);
+. commits with a `gitwebsite: publish …` message and pushes. GitHub Pages redeploys in a
+  minute or two.
+
+Undo a publish by reverting the commit in the Pages checkout and pushing.
+
+== The Pages repository
+
+The checkout is `publish.pages_repo` in `site.yaml` (`gw init` puts it under the gitwebsite
+config folder, e.g. `~/.config/gitwebsite/pages/<name>`; it is cloned from `publish.remote` if
+missing). Other tools may publish into their own sub-directories of the same repository (a
+book's own build script, say); add each one to `publish.preserve`. In the app, the Pages
+repository, branch, and checkout can be set on the *Sites* page.

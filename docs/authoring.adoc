@@ -1,0 +1,218 @@
+= Writing content
+:toc:
+
+All content is AsciiDoc. A post is a header, a blank line, and the body.
+
+== The header
+
+[source,asciidoc]
+----
+= Building a router sled for the workbench
+:type: update
+:date: 2026-10-12
+:project: workbench
+:areas: woodworking, cnc
+:tags: jig, router, plywood
+:summary: A sled that turns the router into a flattening machine — and the three things I got wrong first.
+:hero: media:sled-overview
+:repo: https://github.com/octocat/workbench-cad
+:status: draft
+----
+
+[cols="1,3",options="header"]
+|===
+| Attribute | Meaning
+
+| `:type:` | `article`, `project`, `update`, `app`, `playground`, `page`. Optional: inferred from the folder.
+| `:date:` | `YYYY-MM-DD`. Required for posts (articles and updates).
+| `:updated:` | Date of a significant revision; shown beside the date.
+| `:areas:` | Comma-separated areas (`gw areas` lists them). See <<information-architecture.adoc#,Information architecture>>.
+| `:tags:` | Comma-separated free-form tags.
+| `:project:` | For updates and project-related articles: the project's slug.
+| `:summary:` | One or two sentences for cards, the feed, search, and social previews.
+| `:hero:` | Lead image: `media:<key>`, a path inside a bundle (`photos/front.jpg`), or a URL.
+| `:status:` | `draft` (default for new items) or `published`.
+| `:visibility:` | `public` (default) or `unlisted`.
+| `:featured:` | Present (no value needed) to feature on the home page.
+| `:repo:` | Source repository, linked from the page.
+| `:url:` | Apps: where the live app runs.
+| `:embed:` | Apps: `true` to embed the live app in the page.
+| `:source:` | Registry id this content came from (imports set this).
+| `:slug:` | Override the URL slug (default: from the file name).
+|===
+
+Create items with the CLI rather than by hand — it puts files in the right place and
+validates areas:
+
+[source,console]
+----
+gw new article "Why my first jig failed" --area woodworking --tag jig
+gw new project "Workbench" --area woodworking --area cnc
+gw new update "Router sled" --project workbench --bundle
+gw new app "boingtrace" --area amiga --url https://example.org/boingtrace
+gw new playground "Bezier curves" --area engineering
+gw release articles/why-my-first-jig-failed      # mark published
+----
+
+== Bundles: text with its own images
+
+`--bundle` makes `slug/index.adoc` instead of `slug.adoc`. Everything else in the folder is
+copied beside the page, so images can be referenced by relative path:
+
+[source,asciidoc]
+----
+image::front.jpg[The finished bench, front view]
+----
+
+Projects are always bundles (`content/projects/<slug>/index.adoc`), with updates in
+`updates/`.
+
+== Images and video
+
+Three ways to show media, all usable together:
+
+. *In a bundle* — `image::photo.jpg[Alt text]`. Simple, versioned with the text, served from
+  GitHub Pages. Keep files small (resize to ~2000 px wide; JPEG for photos).
+. *Any URL* — `image::https://example.org/x.jpg[Alt text]`.
+. *The media library* — `image::media:sled-overview[Alt text]`. Keys are defined in
+  `site/media.yaml` (`gw media add`, or uploaded with `gw smugmug upload`). Use this for
+  anything hosted on SmugMug, and for images used on several pages. Video works the same way:
+  `video::media:sled-demo[width=100%]`.
+
+An unknown `media:` key fails the build, so broken images cannot be published.
+
+== Code playgrounds
+
+Mark a source block as a playground and readers can edit and run it in the browser:
+
+[source,asciidoc]
+....
+.Try changing the gravity
+[source.playground,javascript]
+----
+console.log('hello');
+----
+....
+
+Languages (the runtime for each loads from jsDelivr the first time a reader presses *Run*):
+
+[cols="1,3",options="header"]
+|===
+| Language id | Runs on
+
+| `javascript` | A Web Worker; `console.log` output is shown.
+| `python` | Pyodide. Imports such as `numpy` load automatically; `# pip: pkg` installs pure-Python packages.
+| `c`, `cpp` | YoWASP Clang (LLVM as WebAssembly, ~50 MB first use) → `wasm32-wasi`, run with a WASI shim. C++ has no exceptions (`-fno-exceptions`).
+| `lua` | Lua 5.4 (wasmoon).
+| `ruby` | CRuby 3.4 (ruby.wasm) with the standard library; state persists between runs on a page.
+| `sql` | SQLite (sql.js); one database shared by every `sql` block on the page, results shown as tables.
+| `duckdb` | duckdb-wasm; blocks share a database, and *Load file…* imports a local CSV/Parquet/JSON as a table.
+| `prolog` | SWI-Prolog; lines starting `?-` are queries, everything else is the program.
+| `scheme` | BiwaScheme.
+| `basic` | The site's own classic BASIC (`static/js/playground-basic.js`); `INPUT` shows a box in the output.
+| `rust`, `go` | Sent to play.rust-lang.org / go.dev to compile — add `:network: true` to the page.
+| `html` | A sandboxed frame — good for canvas demos.
+|===
+
+Every language except HTML, DuckDB, Rust, and Go runs in a Web Worker, so readers can press
+*Stop* (or Escape) to end an infinite loop. C, C++, and Python blocks get a *stdin* button. The
+runtime is `static/js/playground.js`, loaded by `site.js` only on pages that contain a
+playground; the `/tools/sandbox/` page uses the same runtime with a language picker.
+Playgrounds work in any kind of page, but collections of them belong in `content/lab/playground/`.
+
+== Apps
+
+An app page links to (and optionally embeds) something running publicly:
+
+[source,asciidoc]
+----
+= boingtrace
+:type: app
+:url: https://boingtrace.example.org/
+:embed: true
+:areas: amiga
+:summary: Ray-traced Amiga boing ball, live in the browser.
+----
+
+Embedding only works if the app allows being framed by the site's domain.
+
+== Voice and structure
+
+* Lead with what the thing is and why it exists; then how; then what you learned.
+* For physical builds: materials, tools, the key photos, dimensions that matter, mistakes.
+* For software: what it does, how to run it, the interesting design decision, a link to the repo.
+* Keep `:summary:` concrete — it is what appears in cards, search, and the feed.
+
+== Tools
+
+A tool is an interactive page under `/tools/`. It has two parts:
+
+. `content/tools/<slug>.adoc` — the title, `:category:` (one of the `tools.categories` ids in
+  `site.yaml`: `numbers`, `data`, `encoding`, `crypto`, `time`, `network`), `:summary:`,
+  `:tags:`, optional `:network: true` if it contacts other services, and a short "How to use
+  it" body (shown collapsed under the tool).
+. `static/tools/<slug>.js` — the tool itself, registered with the shared kit:
++
+[source,javascript]
+----
+GW.tool('mytool', (root, k) => {
+  const st = k.store('mytool');                 // remembered in localStorage
+  const input = k.codeArea({ placeholder: 'Paste here' });
+  const out = k.h('pre', { class: 't-out' });
+  input.addEventListener('input', () => (out.textContent = input.value.toUpperCase()));
+  root.append(k.h('div', { class: 't-panel' }, input, out, k.copyButton(() => out.textContent)));
+});
+----
+
+The kit (`static/tools/tools.js`) provides element building, tabs, segmented controls, copy
+buttons, toasts, file pick/read/download, persistent state, and the `.t-*` styles in
+`static/tools/tools.css`. Set `:tool:` if the script name differs from the slug.
+
+=== Shareable links (deep links)
+
+A tool can make its current configuration shareable as a URL. Call `k.share()` last in the tool's
+setup and mark the tool with `:deeplink: true` (the tools index shows a link badge, and a test
+checks the two agree):
+
+[source,javascript]
+----
+k.share({
+  state: () => ({ re: pattern.value, flags: flags.value }),        // JSON-serialisable
+  apply: s => { pattern.value = s.re ?? ''; flags.value = s.flags ?? ''; update(); },
+  readable: ['re', 'flags'],   // short flat state stays human-readable: ?re=a%7Cb&flags=g
+});
+----
+
+The kit adds a *Share link* button to the tool header and applies state from the URL on load.
+State not listed in `readable` (or too long) is packed into `?s=` (deflate + base64url). Readable
+parameters arrive as strings, so `apply` coerces numbers and booleans. The selected tab travels in
+the `#hash` as before. Keep files, uploads, and secrets out of the state.
+
+
+==== Tools whose state lives in `k.store`
+
+Most tools already remember their inputs with `k.store`. For those, don't write `state`/`apply`
+by hand: await `k.shareStore()` first, before building the UI, and build from the store as usual.
+A link then carries the tool's saved settings, and opening one writes them into the store before
+the UI exists:
+
+[source,javascript]
+----
+GW.tool('gears', async (root, k) => {
+  await k.shareStore('gears', {
+    readable: { m: ['spur.m', 'n'], z1: ['spur.z1', 'n'] },  // ?m=1.5&z1=18 → spur.m, spur.z1
+    skip: ['history'],                                       // never shared
+  });
+  const st = k.store('gears');
+  // …build the UI from st as usual…
+});
+----
+
+`readable` maps short parameters to settings (`'key'`, `'key.field'`, or `[path, 'n' | 'b']` to
+coerce hand-written numbers and booleans); an array such as `['data', 'dist']` uses the setting
+names themselves. `inbound` adds hand-written parameters that expand into settings
+(`{ preset: v => ({ state: PRESETS[v] }) }`), `shared` carries settings kept in another
+namespace (`{ ns: 'woodworking', prefix: 'ww:', keys: ['units'] }`), and `scrub` removes
+tool-specific secrets before a link is built. `tab`, keys starting with `_`, and values that look
+like credentials are never shared. Opening a link replaces the visitor's saved settings, offers
+*Restore my settings*, and removes the link from the address bar so a refresh keeps later edits.

@@ -1,0 +1,48 @@
+{% macro card(v) %}
+<article class="card kind-{{ v.kind }}">
+  {% if v.hero_url %}<a class="card-img" href="{{ v.url }}"><img src="{{ v.hero_url | safe }}" alt="" loading="lazy"></a>{% endif %}
+  <div class="card-body">
+    <p class="eyebrow">{{ v.kind_label }}{% if v.date_human %} · <time datetime="{{ v.date_iso }}">{{ v.date_human }}</time>{% endif %}</p>
+    <h3><a href="{{ v.url }}">{{ v.title }}</a></h3>
+    {% if v.project_title and v.kind == "update" %}<p class="card-project">in <a href="{{ v.project_url }}">{{ v.project_title }}</a></p>{% endif %}
+    {% if v.summary %}<p>{{ v.summary }}</p>{% endif %}
+    {% if v.area_links %}<p class="chips">{% for a in v.area_links %}<a class="chip" href="{{ a.url }}">{{ a.title }}</a>{% endfor %}</p>{% endif %}
+  </div>
+</article>
+{% endmacro card %}
+
+{# A card in a grouped listing: chips are the item's areas outside its section; data-areas is
+   every area path it is in (ancestors too), matched by the filter buttons. #}
+{% macro grouped_card(e) %}
+<article class="card kind-{{ e.kind }}" data-areas="{{ e.filter }}">
+  {% if e.hero_url %}<a class="card-img" href="{{ e.url }}"><img src="{{ e.hero_url | safe }}" alt="" loading="lazy"></a>{% endif %}
+  <div class="card-body">
+    <p class="eyebrow">{{ e.kind_label }}{% if e.date_human %} · <time datetime="{{ e.date_iso }}">{{ e.date_human }}</time>{% endif %}</p>
+    <h3><a href="{{ e.url }}">{{ e.title }}</a></h3>
+    {% if e.summary %}<p>{{ e.summary }}</p>{% endif %}
+    {% if e.chips %}<p class="chips">{% for a in e.chips %}<a class="chip" href="{{ a.url }}">{{ a.title }}</a>{% endfor %}</p>{% endif %}
+  </div>
+</article>
+{% endmacro grouped_card %}
+
+{% macro row(v) %}
+<li class="row">
+  <time datetime="{{ v.date_iso }}">{{ v.date_human }}</time>
+  <div>
+    <a class="row-title" href="{{ v.url }}">{{ v.title }}</a>
+    <span class="row-kind">{{ v.kind_label }}{% if v.project_title and v.kind == "update" %} · {{ v.project_title }}{% endif %}</span>
+    {% if v.summary %}<p>{{ v.summary }}</p>{% endif %}
+  </div>
+</li>
+{% endmacro row %}
+
+{% macro area_tree(nodes) %}
+<ul class="area-tree">
+{% for n in nodes %}
+  <li><a href="{{ n.url }}">{{ n.title }}</a> <span class="count">{{ n.count }}</span>
+    {% if n.description %}<p>{{ n.description }}</p>{% endif %}
+    {% if n.children %}{{ self::area_tree(nodes=n.children) }}{% endif %}
+  </li>
+{% endfor %}
+</ul>
+{% endmacro area_tree %}

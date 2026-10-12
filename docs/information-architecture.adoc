@@ -1,0 +1,144 @@
+= Information architecture
+:toc:
+
+What goes where on a site, and why. The architecture is data: the areas live in
+`site.yaml`, the kinds and URLs in the content model (`crates/gw-core/src/content.rs`).
+Change the YAML to change the ontology; no code changes are needed.
+
+== The site at a glance
+
+[cols="1,2,3",options="header"]
+|===
+| Section | URL | What is there
+
+| Home | `/` | Who you are in two lines, featured work, latest writing, projects, areas, and the Lab
+| Articles | `/articles/` | Every post, newest first: articles and project updates
+| Projects | `/projects/` | Long-running work, each with its own timeline of updates; grouped by area (see <<Listing pages>>)
+| Areas | `/areas/` | The ontology: browse by subject
+| Tools | `/tools/` | Developer tools that run in the browser — calculators, encoders, data, hashes, time, and network tools — grouped by category
+| Lab | `/lab/` | Public apps, and code playgrounds that run in the browser
+| About | `/about/` | The author, professionally and personally
+| Publications | `/publications/` | Books and long documents, from the registry (entries of kind `publication`)
+| Tags | `/tags/<tag>/` | Fine-grained cross-cutting labels
+| Feed | `/feed.xml` | Atom feed of posts
+|===
+
+== Kinds of content
+
+Every piece of content is one AsciiDoc file with a kind. The kind decides its URL, its
+template, and where it is listed.
+
+[cols="1,2,2,2",options="header"]
+|===
+| Kind | Use it for | Lives in | URL
+
+| `article` | A standalone write-up: something built, learned, or thought about | `content/articles/<slug>.adoc` | `/articles/<slug>/`
+| `project` | Ongoing work that will have several updates; the project's home page | `content/projects/<slug>/index.adoc` | `/projects/<slug>/`
+| `update` | A dated entry in a project's timeline | `content/projects/<project>/updates/<slug>.adoc` | `/projects/<project>/<slug>/`
+| `app` | A live app that is publicly exposed (link and optional embed) | `content/lab/apps/<slug>.adoc` | `/lab/apps/<slug>/`
+| `playground` | Code readers can edit and run in the browser | `content/lab/playground/<slug>.adoc` | `/lab/playground/<slug>/`
+| `tool` | An interactive browser tool (its UI is `static/tools/<slug>.js`) | `content/tools/<slug>.adoc` | `/tools/<slug>/`
+| `page` | Standing pages (About, Uses, Contact) | `content/pages/<slug>.adoc` | `/<slug>/`
+|===
+
+*Article or project update?* If the work is part of something that will have more than one
+write-up — a workbench build, a long-running app, a book — make it a project and post
+updates to it. A one-off becomes an article. An article can still point at a project with
+`:project:`, and then it shows in that project's timeline.
+
+*Posts* are articles and updates: they are dated, appear in `/articles/`, the feed, the home
+page's latest writing, and their areas.
+
+== Areas: the ontology
+
+Areas form a tree. Each item lists one or more areas in `:areas:`, by full path
+(`making/woodworking`) or by a unique id (`woodworking`). An item may sit in several areas
+at once — a CNC-cut jig for an electronics enclosure belongs in `cnc`, `woodworking`, and
+`electronics` — and every area page includes everything in its sub-areas.
+
+The areas are defined in `site.yaml`. For example, a site covering professional work, making,
+and retro computing might use:
+
+[cols="1,3",options="header"]
+|===
+| Area | Covers
+
+| `work` | Professional engineering: `engineering`, `search`, `ai`, `data`, `tools`
+| `making` | Physical things: `woodworking`, `3d-printing`, `cnc`, `metalwork`, `electronics`, `glass-and-textiles`
+| `retro` | Retro computing: `amiga`, `atari`
+| `learning` | Subjects studied and the books that came out of them: `biology-and-medicine`, `mathematics`
+| `life` | The personal side: `photography`, `travel`
+|===
+
+Rules of thumb:
+
+* Use the *most specific* areas that apply; the parent pages pick the item up anyway.
+* Two or three areas is normal; five suggests the item should be split.
+* Add a new area when three or more items would sit in it. Until then, use a tag.
+* Areas describe *subject*; kinds describe *form*; tags are free-form detail.
+
+== Visibility and status
+
+[cols="1,3",options="header"]
+|===
+| Setting | Effect
+
+| `:status: draft` | Not built for the live site. Visible in the local preview (`gw build --drafts`, `gw serve`).
+| `:status: published` | Built and listed (the default once you run `gw release`).
+| `:visibility: unlisted` | Built, reachable by URL, but `noindex`, and left out of every listing, feed, area page, and the sitemap. Use it for things shared by link only.
+| `:featured:` | Shown in the home page's Featured strip.
+|===
+
+The books and long documents published under the domain (the AI primer, the math book, the
+medical maker book, the SDLC and Engineering Intelligence documents) are listed on
+`/publications/`, linked from the navigation. Registry entries carry their own
+`visibility`; if any publication is `unlisted`, the publications page is built `noindex`
+and left out of the sitemap.
+
+== Where information came from
+
+Every external origin is recorded in the registry (`site/registry.yaml`): publications,
+imported WordPress posts, SmugMug albums, repositories. Content points back with
+`:source: <registry id>`. See <<registry-and-ideas.adoc#,Registry and ideas>>.
+
+== Content that lives in other repositories
+
+Documentation written alongside code can stay in that code's repository. List it under
+`sources` in `site.yaml`:
+
+[source,yaml]
+----
+sources:
+  - repo: ~/code/my-book
+    include: website/*.adoc
+    label: my-book
+----
+
+Those files are built into the site like local content (they need the usual header). Their
+ids are `ext:<label>/<path>`, and `:source:` defaults to `repo:<label>`.
+
+== Listing pages
+
+`/articles/` and `/projects/` take their intro and arrangement from `site.yaml`:
+
+[source,yaml]
+----
+articles:
+  intro: Everything I have written up, newest first.
+projects:
+  intro: Things I have built or am building.
+  group_by_area: true               # the default for projects; false gives one grid
+  group_labels: { work: Software }  # section headings; default: the area's title
+  other_label: Other                # projects with no areas
+----
+
+Grouped, the page has a section per top-level area, in the order of `areas`. Each project
+appears once, in the section of its *primary* area: the top-level parent of the first area in
+its `:areas:` header (so `:areas: amiga, woodworking` puts it under Retro computing). Empty
+sections are hidden; projects without areas come last. Each card shows the project's areas
+outside its section as chips.
+
+Filter buttons at the top — *All*, each top-level area, and the sub-areas in use — show every
+project that has that area anywhere in its list, not only in its own section. They work without
+a reload and can be linked to: `/projects/?area=making/3d-printing`. `articles:` takes the same
+keys (grouping is off unless `group_by_area: true`).

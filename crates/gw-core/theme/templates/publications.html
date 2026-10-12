@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block main %}
+<section class="wrap narrow block page-top">
+  <h1>Publications</h1>
+  <p class="lede">Long-form books and strategy documents. Each is free to read online, with PDF editions; several come with slide decks or companion code.</p>
+  {% for g in groups %}
+  <h2 class="section-title">{{ g.0 }}</h2>
+  {% for p in g.1 %}
+  <article class="pub">
+    <h3><a href="{{ p.url }}">{{ p.title }}</a></h3>
+    {% if p.subtitle %}<p class="sub">{{ p.subtitle }}</p>{% endif %}
+    {% if p.meta %}<p class="chips">{% for x in p.meta %}<span class="chip plain">{{ x }}</span>{% endfor %}</p>{% endif %}
+    {% if p.description %}<p>{{ p.description }}</p>{% endif %}
+    <p class="actions">{% for l in p.links %}<a class="button{% if not l.primary %} ghost{% endif %}" href="{{ l.url }}">{{ l.label }}{% if l.note %} <span class="note">{{ l.note }}</span>{% endif %}</a>{% endfor %}</p>
+  </article>
+  {% endfor %}
+  {% endfor %}
+</section>
+{% endblock %}

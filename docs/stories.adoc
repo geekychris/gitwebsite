@@ -1,0 +1,191 @@
+= Project stories: from photos to a post
+
+A *story* turns a handful of photos and a few notes into a project write-up, through an
+interview with Claude. Example: "Creating the Amiga 40th exhibit".
+
+. *Collect* — in the app's *Stories* section (or `gw story new`), give the story a title and a
+  few lines of notes, then add photos:
+** drop or paste files (JPEG, PNG, GIF, WebP; iPhone HEIC is converted with `sips`);
+** *Pick from SmugMug*: paste any SmugMug page link (album, gallery, folder, or a single photo —
+   custom domains work too) or choose one of your albums, select photos (click, Shift-click for a
+   range, double-click to enlarge, arrow keys in the enlarged view), and write a *comment* for
+   each — what's happening and why it matters. Comments are required; the *Add* button stays
+   disabled until every selected photo has one. Re-opening the picker on the same album shows what
+   is already in the story, so comments can be edited or photos removed;
+** *Add links…*: image URLs, SmugMug links, `smugmug:<ImageKey>`, or `media:<key>`.
+. *Interview* — run `/project-story <slug>` in Claude Code. Claude looks at every photo, reads
+  your notes and comments, and asks a few questions at a time, recording each answer in the
+  story's transcript.
+. *Outline* — Claude proposes title, summary, sections, and which photos go where; you approve.
+. *Draft* — Claude writes the post in your voice. It refers to photos as `story:<id>`, and
+  `gw story draft` turns those into real images: local photos are copied beside the post at most
+  2000 px wide, re-encoded so EXIF (including GPS location) is removed, with portrait photos kept
+  upright; SmugMug photos become `media:<story>-<id>` keys served from SmugMug. The post is a
+  draft; the preview opens at `http://127.0.0.1:8790/preview/...`.
+. *Release and publish* — only when you say so (`gw release …`, then the usual publish).
+
+== The project interview (Claude Code)
+
+Say *"let's do a project interview"* in Claude Code (or run `/project-story`) and give it what you
+have: a pasted photo, one or more folders on your Mac, and/or a SmugMug album link.
+
+. *Candidates* — Claude creates the story and offers your photos as numbered candidates
+  (`gw story add-dir`, `add-smugmug`, `add --candidate`). Nothing is copied yet, and your folders
+  and SmugMug are never changed. Videos are reported, not added.
+. *Choosing* — Claude shows numbered contact sheets (`gw story contact-sheet`, `open-sheet` opens
+  one in Preview) and describes them. You choose by number in the terminal ("3, 7-9, 12") or in
+  the app's *Candidates* panel. Every chosen photo needs a comment in your words; a photo found
+  in a folder is copied into the story when chosen.
+. *The story so far* — tell it roughly, in a few sentences; it is saved as the story's narrative.
+. *Interview* — Claude asks a few questions at a time. Each question it is waiting on also
+  appears in the app, so you can answer in either place; before every round Claude checks what
+  changed (`gw story changes`) and picks up what you did in the app.
+. *Outline → draft → preview → release* — as above; publishing only when you ask.
+
+The app's story page is live: changes made from the terminal, by Claude, or in another window
+appear within a second (a "Live" line and a summary of what changed). It never overwrites what you
+are typing: a refresh waits until you leave the field, photo fields save one at a time, and the
+story text is saved against the version you started from — if Claude changed it meanwhile, you
+choose to keep yours, theirs, or both.
+
+Every change is recorded in `changes.jsonl` with where it came from (`app`, `cli`, `mcp`), and
+writes take the story's lock, so the CLI, the app, and the MCP server can work on one story at
+the same time.
+
+== Where things live
+
+[source,text]
+----
+site/stories/<slug>/
+  story.yaml      title, target (project | article | update), areas, tags, notes, narrative
+                  (the story so far), status, rev, pending questions, images [{id, number, state
+                  (candidate | selected | rejected), source, origin, caption, notes (your
+                  comment), taken, width, height, include}]
+  images/         originals you dropped in (git-ignored: photos are large; the post keeps
+                  web-sized copies)
+  interview.md    the interview transcript
+  outline.md      the agreed outline
+  changes.jsonl   the change feed: rev, when, from where (app / cli / mcp), what
+  .rev, .lock     current revision (for cheap polling) and the write lock
+~/.gitwebsite/cache/stories/<slug>/   review thumbnails (what Claude looks at)
+----
+
+Stories are never built or published; only the drafted post (under `content/`) is.
+
+== Commands
+
+[source,console]
+----
+gw story new "Creating the Amiga 40th exhibit" --area amiga --tag exhibit
+gw story add amiga-40th-exhibit ~/Pictures/exhibit/*.jpg
+gw story smugmug-browse https://<you>.smugmug.com/Events/Amiga-40      # list photos and ImageKeys
+gw story add amiga-40th-exhibit smugmug:AbC12dE --comment "Doors open, 9am" --caption "The queue"
+gw story show amiga-40th-exhibit          # everything, with files to look at
+gw story qa amiga-40th-exhibit --q "…" --a "…"
+gw story draft amiga-40th-exhibit --file draft.adoc
+
+# the project interview
+gw story add-dir amiga-40th-exhibit ~/Pictures/Amiga40 --recursive
+gw story add-smugmug amiga-40th-exhibit https://<you>.smugmug.com/Events/Amiga-40/n-XXXX
+gw story contact-sheet amiga-40th-exhibit        # numbered JPEG; --open, --page 2, --selected
+gw story select amiga-40th-exhibit 3,7-9 --comment "…"     # or select, then `comment <n> "…"`
+gw story narrative amiga-40th-exhibit "It started when…"
+gw story ask amiga-40th-exhibit "Who lent the machines?"    # answer here or in the app
+gw story answer amiga-40th-exhibit "The club, mostly."
+gw story changes amiga-40th-exhibit --since 12            # what happened (and where) since rev 12
+gw story wait amiga-40th-exhibit --answer                  # until an answer arrives from the app
+----
+
+REST: `POST /api/stories/{slug}/add-dir`, `GET …/contact-sheet` (JSON) and `…/contact-sheet.jpg`,
+`POST …/select|unselect|reject|comment|ask|answer`, `PUT …/narrative` (`base` → 409 on a
+conflict), `GET …/pending`, `GET …/changes?since=N`, `GET …/events` (Server-Sent Events: a
+`change` event per change), and `GET /api/stories/{slug}?since=N` (`{unchanged: true}` while
+nothing changed). MCP: `story_add_dir`, `story_add_smugmug`, `story_contact_sheet`,
+`story_select`, `story_unselect`, `story_reject`, `story_comment`, `story_narrative`,
+`story_ask`, `story_answer`, `story_pending`, `story_changes`.
+
+The REST API has the same operations under `/api/stories` (`/api/stories/{slug}/upload?name=…`
+takes a file as the request body) and `/api/smugmug/{albums,browse}`; the MCP server has
+`story_*`, `smugmug_browse`, and `smugmug_albums` tools. SmugMug access is read-only here:
+browsing lists albums and photos; nothing on SmugMug is changed.
+
+[[enhance]]
+== Enhancing an existing post
+
+An *enhancement* reworks a post that's already on the site — an article, a project page, an
+update — with Claude. It's a story tied to the post (`stories/enhance-<slug>/`), so it has the same
+live interview, questions answered in the app or the terminal, and change feed. The differences:
+
+* *It starts from the post.* In the app, open the post under Content and choose
+  *✦ Enhance with Claude* (or `gw story enhance articles/my-first-post`, MCP `story_enhance`).
+  Title, kind, areas, tags, and project come from the post.
+* *It knows the code behind it.* The repository is the post's `:repo:`; else its registry entry
+  (`:source:`, or the entry whose `content` is the post — an `origin` of
+  `https://github.com/x/y (~/code/y)` also gives the local path); else, for an update, its
+  project's. A local checkout is found by matching git remotes under the folders in `repo_roots`
+  (`gw config set repo-roots ~/code,~/src`; default: whichever of `~/code`, `~/src`,
+  `~/projects`, `~/dev`, `~/git`, `~/Developer` exist; two levels deep; `GW_REPO_ROOTS` overrides). Change it on the page if it's wrong.
+* *Key questions.* Seven standard questions — inspiration, why it exists, how it works, the
+  hardest part, what you learned, what's next, who it's for — that you can answer on the page at
+  any time (all optional). Each answer is saved when you leave the box and lands in the interview.
+* *Claude proposes; you accept.* Claude's draft is stored as `proposed.adoc` in the story; the
+  post is untouched. The page shows it as a diff against the post with *Accept into the post*,
+  *Discard*, and *Ask for changes* (your feedback goes into the transcript and Claude revises).
+  Accepting writes it over the post through the normal draft path (images resolved) and keeps the
+  post's address, `:status:`, `:date:`, `:type:`, `:project:`, `:source:`, `:slug:`, and any
+  attribute the proposal left out; it stamps `:updated:` and rebuilds the preview. A published
+  post stays published: the change goes live at the next publish.
+
+=== Projects
+
+Project pages are the main use. Open the project under Content (`projects/<slug>`) and choose
+*✦ Enhance with Claude*: the repository comes from the project's `:repo:` or its `repo-<slug>`
+registry entry, and the checkout from its git remote (a project whose `:repo:` is
+`github.com/octocat/hello` → `~/code/hello`, or a submodule inside another checkout). Claude reads the code and the project's updates, so the page
+becomes the overview and links to the updates rather than repeating them. Accepting changes only
+`index.adoc`: the `updates/` folder and the bundle's other files are untouched, and `:repo:`,
+`:featured:`, `:hero:`, `:source:`, areas, and tags are kept.
+
+=== Starting Claude from the app
+
+*Start Claude* runs Claude Code headless (`claude -p`) on the enhancement, with the
+`enhance-post` skill. It reads the post and the repository, asks its questions on the page (it
+waits for your answers with `story_wait`), and writes the proposal. Its progress shows under the
+button; *Stop* ends it. It runs in the gitwebsite checkout with `--add-dir <repo>`, its own
+gitwebsite MCP server (`gw --site <site> mcp`, changes recorded as `claude`), and
+`--permission-mode dontAsk` with only these tools allowed: reading files (Read, Grep, Glob,
+read-only git and `ls`), the Skill tool, and the gitwebsite tools for reading content and running
+the story — it can't edit files, accept the proposal, or publish. Output goes to
+`stories/<slug>/claude.log`.
+
+The `claude` binary is found in `~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, and
+`~/.claude/local`, then on PATH (temporary directories skipped; `GW_CLAUDE_BIN` overrides); `gw` is this checkout's
+`target/release/gw` or `~/.local/bin/gw` (`GW_BIN` overrides). Prefer to drive it yourself? Copy
+the command (`/enhance-post <slug>`) into Claude Code instead.
+
+[source,text]
+----
+site/stories/enhance-<slug>/
+  story.yaml      … enhances (the post's id), repo {url, path}, key_answers, proposal {at, by,
+                  title, round}, claude {pid, started, finished, exit_code}
+  proposed.adoc   the revised post, while one is waiting
+  claude.log      the last session started from the app (stream-json)
+----
+
+[source,console]
+----
+gw story enhance articles/my-first-post      # start or reopen → enhance-my-first-post
+gw story key enhance-my-first-post inspiration "A rainy weekend and an old computer in the loft."
+gw story context enhance-my-first-post       # what Claude reads: post, answers, repo
+gw story claude enhance-my-first-post start  # or: /enhance-post enhance-my-first-post in Claude Code
+gw story proposal enhance-my-first-post      # the diff
+gw story request-changes enhance-my-first-post "Keep the original title."
+gw story accept enhance-my-first-post        # or discard
+----
+
+REST: `POST /api/items/{id}/enhance`, `GET /api/stories/{slug}/context`,
+`PUT …/key-answers` (`{answers: {id: text}}`), `PUT …/repo` (`{url, path}`), `GET …/proposal`
+(text, current, diff), `POST …/accept|discard`, `POST …/request-changes` (`{text}`), and
+`GET|POST|DELETE …/claude` (status and log, start, stop). MCP: `story_enhance`,
+`story_context`, `story_key_answers`, `story_set_repo`, `story_proposal`, `story_accept`
+(needs `confirm`), `story_discard`, `story_request_changes`, `story_wait`.

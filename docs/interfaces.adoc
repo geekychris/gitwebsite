@@ -1,0 +1,115 @@
+= Interfaces: CLI, REST, MCP, desktop app
+:toc:
+
+All four interfaces call the same operations (`crates/gw/src/ops.rs`) and return the same
+JSON. Use whichever fits: the CLI in a terminal, the desktop app or browser UI for editing,
+REST for scripts, MCP for Claude.
+
+== Command line (`gw`)
+
+[cols="1,3",options="header"]
+|===
+| Command | Does
+
+| `gw build [--drafts]` | Build into `site/dist/`
+| `gw check` | Validate content, areas, media keys, registry sources
+| `gw list [--kind --area --tag --drafts]` | List content
+| `gw show <id>` | Show an item and its source
+| `gw new <kind> "<title>" [--area --tag --project --summary --repo --url --bundle]` | Create a draft
+| `gw release <id>` / `gw unrelease <id>` | Mark published / draft
+| `gw areas` | The ontology
+| `gw idea list\|add\|set\|link` | The curation list
+| `gw registry list\|show\|put\|remove` | Provenance
+| `gw media list\|add` | The media library
+| `gw smugmug …`, `gw wordpress …` | Integrations (see <<integrations.adoc#,Integrations>>)
+| `gw serve [--port 8790] [--open]` | REST API, UI, and preview
+| `gw mcp` | MCP server on stdio
+| `gw publish [--dry-run] [--no-push] [-y] [-m msg]` | Publish to GitHub Pages
+|===
+
+Global flags: `--site <dir>` (default: `$GW_SITE`, then `site.yaml` here or in a parent folder,
+then the current site in the user config, `gw config show`) and `--json`.
+
+Setting up: `gw init <dir>` creates a site and `gw config` manages the list of sites, the current
+one, and program paths (see <<setup.adoc#,Setting up>>). `gw site` shows the current site.
+
+== REST API (`gw serve`)
+
+Bound to `127.0.0.1` only. `/` redirects to the UI at `/app/`; the draft-inclusive preview is
+served at `/preview/` (and at the site's own paths).
+
+[cols="1,2,3",options="header"]
+|===
+| Method | Path | Does
+
+| GET | `/api/site` | Site identity and settings
+| GET | `/api/areas` | The area tree, flattened
+| GET | `/api/items?kind=&area=&tag=&drafts_only=` | List content
+| POST | `/api/items` | Create (`kind`, `title`, `areas`, `tags`, `project`, `summary`, `repo`, `url`, `body`, `bundle`)
+| GET | `/api/items/{id}` | One item with `source_text`
+| PUT | `/api/items/{id}/source` | Replace the source (`{text}`); validated, rolled back on error
+| POST | `/api/items/{id}/status` | `{status: draft\|published}`
+| GET | `/api/check` | Validation problems
+| POST | `/api/build` | `{drafts}`; `drafts:true` refreshes the preview
+| GET | `/api/publish/plan` | What a publish would change
+| POST | `/api/publish` | `{message, push, confirm:true}` — refused (428) without `confirm`
+| GET, POST | `/api/ideas` | List, add
+| PATCH | `/api/ideas/{id}` | Update status, title, notes, content, areas
+| GET, POST | `/api/registry` | List, upsert
+| DELETE | `/api/registry/{id}` | Remove
+| GET, POST | `/api/media` | List, add (`key`, `url`, `kind`, `alt`, `caption`)
+|===
+
+Errors are `{"error": "..."}` with a 4xx or 5xx status.
+
+== MCP server (`gw mcp`)
+
+Registered with Claude Code at user scope:
+
+[source,console]
+----
+claude mcp add --scope user gitwebsite -- gw mcp
+----
+
+Tools: `site_info`, `list_areas`, `list_content`, `get_content`, `create_content`,
+`update_content_source`, `set_status`, `check_site`, `build_site`, `publish_plan`,
+`publish_site`, `list_ideas`, `add_idea`, `update_idea`, `list_registry`,
+`upsert_registry_entry`, `list_media`, `add_media`. Tool descriptions carry the content
+conventions, so a model can write correctly structured posts. `publish_site` requires
+`confirm: true` and tells the model to get the user's agreement first.
+
+== Desktop app
+
+`gitwebsite.app` (Tauri) starts the REST server in-process on a free port (8790 by default)
+and opens the management UI in a native window. The site is `$GW_SITE` or the current site in
+the user config; with neither, the window opens on the setup screen (open an existing site or
+create one). The *Sites* page and the switcher at the foot of the sidebar change sites.
+
+[source,console]
+----
+make app                 # builds target/release/bundle/macos/gitwebsite.app
+make install-app         # copies it to ~/Applications
+----
+
+The UI has: *Content* (filter, edit source with preview, release, create), *Ideas* (a board
+by status; drag to move; "Draft this" creates and links a draft), *Registry*, *Media*,
+*Build & Publish* (check, preview build, publish plan, publish after typing "publish"), and
+*Preview*.
+
+== Claude Code skills
+
+Installed into `~/.claude/skills/` by `scripts/install-skills.sh` (symlinks, so they update
+with the repo):
+
+[cols="1,3",options="header"]
+|===
+| Skill | When it helps
+
+| `gitwebsite-write` | Write or update a post, project, update, app, playground, or page
+| `gitwebsite-media` | Add images and video — bundles, URLs, the media library, SmugMug
+| `gitwebsite-publish` | Build, preview, check, release, and publish (always with confirmation)
+| `gitwebsite-curate` | Review ideas and the registry; find unrecorded work
+| `suggest-post` | Proactively suggests sharing notable finished work, once, as an idea or draft
+| `project-story` | `/project-story <slug>`: interview about a story's photos and notes, agree an outline, write the draft
+| `enhance-post` | `/enhance-post <slug or post>`: rework an existing post — read it and its code repository, interview the author (answers in the app), write a proposal they accept in the app (also what the app's Start Claude button runs)
+|===

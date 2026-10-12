@@ -1,0 +1,73 @@
+= Architecture
+:toc:
+
+gitwebsite is one Rust core with four front ends. Every front end calls the same operations,
+so the CLI, the REST API, the MCP server, and the desktop app cannot drift apart.
+
+[source]
+----
+                ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐
+                │  gw (CLI)    │  │ REST + UI    │  │ MCP (stdio)  │  │ Desktop app      │
+                │              │  │ gw serve     │  │ gw mcp       │  │ Tauri, embeds    │
+                │              │  │ /api /app    │  │ for Claude   │  │ gw serve         │
+                └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └────────┬─────────┘
+                       └─────────────────┴────────┬────────┴───────────────────┘
+                                         gw::ops (shared operations → JSON)
+                                                  │
+                ┌─────────────────────────────────┴───────────────────────────────────┐
+                │ gw-core: config · content · areas · registry · ideas · media         │
+                │          render (Asciidoctor) · build (Tera templates) · publish      │
+                └─────────────────────────────────┬───────────────────────────────────┘
+                     site/ (content, templates, YAML stores)  →  dist/  →  Pages repo
+----
+
+== Repository layout
+
+[source]
+----
+crates/gw-core/     the core library (no I/O beyond the filesystem and git)
+crates/gw/          shared operations, CLI, REST server, MCP server, integrations
+  src/ops.rs        every operation, returning JSON
+  src/server.rs     REST API, management UI, preview
+  src/mcp.rs        MCP server
+  src/integrations/ SmugMug and WordPress
+app/src-tauri/      the desktop app
+ui/                 the management UI (plain HTML/CSS/JS, served at /app/)
+site/               the managed site: content, templates, static assets, YAML stores
+docs/               this documentation
+skills/             Claude Code skills (installed with scripts/install-skills.sh)
+----
+
+== The site directory
+
+[source]
+----
+site/
+  site.yaml          identity, navigation, areas (the ontology), build and publish settings, sources
+  content/           all content (see Information architecture)
+  templates/         Tera templates — one per page type, plus macros
+  static/            CSS, JavaScript, images copied as-is
+  registry.yaml      provenance: publications, imports, albums, repos
+  ideas.yaml         the curation list
+  media.yaml         the media library (media:<key>)
+  dist/              build output (ignored)
+  .gw-cache/         rendered-HTML cache and preview build (ignored)
+----
+
+== Build
+
+. Load `site.yaml`, scan `content/` and every external source.
+. Validate: areas resolve, projects exist, posts have dates, media keys resolve, sources are
+  in the registry.
+. Expand `media:<key>` references, then render every document in *one* Ruby/Asciidoctor
+  process; cache HTML by a hash of source and attributes.
+. Render pages with Tera, write listings, area and tag pages, the Lab, publications, the feed,
+  the sitemap, and a search index; copy bundle assets and `static/`.
+. Write `.gitwebsite-manifest.json`: the exact list of files this build owns.
+
+A full build of a small site takes well under a second after the first run.
+
+== Publish
+
+The Pages repository may also host other projects — books, a résumé. gitwebsite only ever writes, updates, or deletes files listed in its manifest,
+and refuses to produce anything under `publish.preserve`. See <<publishing.adoc#,Publishing>>.

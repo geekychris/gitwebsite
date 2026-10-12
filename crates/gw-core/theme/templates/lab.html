@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% import "macros.html" as m %}
+{% block main %}
+<section class="wrap block page-top">
+  <h1>Lab</h1>
+  <p class="lede">Things you can use right now: apps I run publicly, and code you can edit and run in your browser. For everyday developer utilities, see <a href="/tools/">Tools</a>.</p>
+  <h2 class="section-title">Apps</h2>
+  {% if apps %}<div class="grid">{% for v in apps %}{{ m::card(v=v) }}{% endfor %}</div>{% else %}<p class="empty">No public apps yet.</p>{% endif %}
+  <h2 class="section-title">Playgrounds</h2>
+  {% if playgrounds %}<div class="grid">{% for v in playgrounds %}{{ m::card(v=v) }}{% endfor %}</div>{% else %}<p class="empty">No playgrounds yet.</p>{% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,8 @@
+# OAuth 1.0a test vectors from Twitter's published signing example
+# (https://developer.x.com/en/docs/authentication/oauth-1-0a/creating-a-signature),
+# used only in crates/gw/src/integrations/oauth1.rs unit tests. Not real credentials.
+crates/gw/src/integrations/oauth1.rs:generic-api-key:90
+crates/gw/src/integrations/oauth1.rs:generic-api-key:91
+crates/gw/src/integrations/oauth1.rs:generic-api-key:94
+crates/gw/src/integrations/oauth1.rs:generic-api-key:115
+crates/gw/src/integrations/oauth1.rs:generic-api-key:116

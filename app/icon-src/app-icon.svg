@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ef8a45"/>
+      <stop offset="1" stop-color="#a33f16"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity=".28"/>
+      <stop offset=".5" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="drop" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#5a1f05" flood-opacity=".35"/>
+    </filter>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#000" flood-opacity=".22"/>
+    </filter>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#bg)" filter="url(#drop)"/>
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#shine)"/>
+  <!-- browser window -->
+  <g filter="url(#soft)">
+    <rect x="222" y="250" width="580" height="500" rx="52" fill="#fffaf6"/>
+    <path d="M222 302 a52 52 0 0 1 52 -52 h476 a52 52 0 0 1 52 52 v40 h-580 z" fill="#f6dccb"/>
+    <circle cx="284" cy="298" r="15" fill="#e0703a"/>
+    <circle cx="332" cy="298" r="15" fill="#efa77c"/>
+    <circle cx="380" cy="298" r="15" fill="#f4c7aa"/>
+  </g>
+  <!-- git branch -->
+  <g fill="none" stroke="#b4521f" stroke-width="30" stroke-linecap="round">
+    <path d="M392 456 V 650"/>
+    <path d="M392 612 C 392 528, 612 560, 612 476"/>
+  </g>
+  <g fill="#fffaf6" stroke="#b4521f" stroke-width="26">
+    <circle cx="392" cy="438" r="40"/>
+    <circle cx="392" cy="668" r="40"/>
+    <circle cx="612" cy="456" r="40"/>
+  </g>
+</svg>
