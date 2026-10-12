@@ -179,9 +179,17 @@ enum ConfigCmd {
         current: bool,
     },
     /// Switch the current site (by name or path).
-    Use { site: String },
+    Use {
+        /// The site's name or path
+        #[arg(value_name = "SITE")]
+        which: String,
+    },
     /// Forget a site (its files are untouched).
-    Remove { site: String },
+    Remove {
+        /// The site's name or path
+        #[arg(value_name = "SITE")]
+        which: String,
+    },
     /// Set repo-roots (comma-separated folders), claude-bin, or gw-bin; an empty value clears it.
     Set { key: String, value: String },
 }
@@ -641,8 +649,8 @@ fn main() -> Result<()> {
                 Cmd::Config(c) => match c {
                     ConfigCmd::Show => setup::show()?,
                     ConfigCmd::AddSite { path, name, current } => setup::add_site(&path, name.as_deref(), current)?,
-                    ConfigCmd::Use { site } => setup::use_site(&site)?,
-                    ConfigCmd::Remove { site } => setup::remove_site(&site)?,
+                    ConfigCmd::Use { which } => setup::use_site(&which)?,
+                    ConfigCmd::Remove { which } => setup::remove_site(&which)?,
                     ConfigCmd::Set { key, value } => setup::set(&key, &value)?,
                 },
                 _ => unreachable!(),
@@ -957,4 +965,23 @@ fn main() -> Result<()> {
     };
     print(j, &v);
     Ok(())
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+    use clap::{CommandFactory, Parser};
+
+    #[test]
+    fn cli_definition_is_consistent() {
+        Cli::command().debug_assert();
+    }
+
+    /// A subcommand argument named like a global option (`--site`) made clap panic.
+    #[test]
+    fn config_use_and_remove_parse() {
+        for argv in [["gw", "config", "use", "my-site"], ["gw", "config", "remove", "/tmp/x"]] {
+            Cli::try_parse_from(argv).expect("parses");
+        }
+    }
 }
