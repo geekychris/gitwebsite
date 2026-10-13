@@ -52,7 +52,8 @@ Then edit the file (or `update_content_source` with the full text from `get_cont
 Header (one attribute per line, then a blank line):
 `:type:` · `:date: YYYY-MM-DD` · `:areas:` · `:tags:` · `:project:` · `:summary:` (one line, used on
 cards and feeds) · `:hero: media:key` · `:status: draft` · `:repo:` · `:url:` / `:embed: true` (apps)
-· `:source: <registry id>` (provenance) · `:featured: true`.
+· `:source: <registry id>` (provenance) · `:featured: true` · `:pinned: 1` (top of the home page;
+the number orders pins).
 
 - Images: `image::media:key[Alt text]` (library media), `image::photo.jpg[Alt]` (file beside a
   bundle's `index.adoc`), `image::https://…[Alt]`. Video: `video::media:key[]`.

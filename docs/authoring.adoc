@@ -34,6 +34,7 @@ All content is AsciiDoc. A post is a header, a blank line, and the body.
 | `:status:` | `draft` (default for new items) or `published`.
 | `:visibility:` | `public` (default) or `unlisted`.
 | `:featured:` | Present (no value needed) to feature on the home page.
+| `:pinned:` | Pin to the top of the home page, above Featured. A number (`:pinned: 1`) orders the pins, lowest first; pins without one follow, newest first.
 | `:repo:` | Source repository, linked from the page.
 | `:url:` | Apps: where the live app runs.
 | `:embed:` | Apps: `true` to embed the live app in the page.

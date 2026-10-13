@@ -16,6 +16,7 @@
 //! :embed: true              // apps: embed the live app in an iframe
 //! :source: wordpress-123    // registry id this content came from
 //! :featured: true
+//! :pinned: 1               // home page: pinned at the top (optional number orders the pins)
 //! ```
 //!
 //! Where an item lives decides its kind and URL when `:type:` is absent:
@@ -95,6 +96,10 @@ pub struct Item {
     pub draft: bool,
     pub unlisted: bool,
     pub featured: bool,
+    /// Pinned to the top of the home page (`:pinned:`).
+    pub pinned: bool,
+    /// `:pinned: <n>` orders the pins, lowest first; pins without a number follow, newest first.
+    pub pin_order: Option<i64>,
     pub repo: Option<String>,
     pub app_url: Option<String>,
     pub embed: bool,
@@ -149,6 +154,11 @@ fn list(v: Option<&String>) -> Vec<String> {
 fn truthy(v: Option<&String>) -> bool {
     matches!(v.map(|s| s.trim().to_ascii_lowercase()).as_deref(), Some("true" | "yes" | "1" | ""))
         && v.is_some()
+}
+
+/// `:pinned: 2` → `Some(2)`; `:pinned:` or `:pinned: true` → `None` (pinned, unordered).
+fn pin_order(v: Option<&String>) -> Option<i64> {
+    v.and_then(|s| s.trim().parse::<i64>().ok()).filter(|n| *n > 0)
 }
 
 fn date(v: Option<&String>) -> Result<Option<NaiveDate>> {
@@ -237,6 +247,8 @@ pub fn load_item(path: &Path, rel: &Path) -> Result<Item> {
         draft: status == "draft",
         unlisted: visibility == "unlisted",
         featured: truthy(attrs.get("featured")),
+        pinned: truthy(attrs.get("pinned")) || pin_order(attrs.get("pinned")).is_some(),
+        pin_order: pin_order(attrs.get("pinned")),
         repo: attrs.get("repo").cloned().filter(|s| !s.is_empty()),
         app_url: attrs.get("url").cloned().filter(|s| !s.is_empty()),
         embed: truthy(attrs.get("embed")),

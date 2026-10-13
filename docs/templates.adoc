@@ -35,10 +35,12 @@ Every page: `site` (title, tagline, base_url, author, description, links), `nav`
 Item pages add `item`, and listings add `entries`, each an item view with: `id`, `kind`,
 `kind_label`, `title`, `url`, `slug`, `date_human`, `date_iso`, `updated_human`, `summary`,
 `hero_url`, `area_links` (path, title, url), `tags`, `project_title`, `project_url`, `repo`,
-`app_url`, `embed`, `featured`, `reading_minutes`, `html` (the rendered body), and `attrs`
+`app_url`, `embed`, `featured`, `pinned`, `pin_order`, `reading_minutes`, `html` (the rendered body), and `attrs`
 (every header attribute, for custom fields).
 
-Extra context: home gets `featured`, `posts` (latest six), `projects`, `apps`; projects get
+Extra context: home gets `pinned`, `featured`, `posts` (latest six), `projects`, `apps` — each list
+leaves out what an earlier one holds, so nothing repeats (the complete lists are `all_posts` and
+`all_projects`); projects get
 `updates`; posts get `related`; area pages get `area` and `crumbs`; the Lab gets `apps` and
 `playgrounds`; publications gets `groups`.
 

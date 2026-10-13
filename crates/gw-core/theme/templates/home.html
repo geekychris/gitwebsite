@@ -10,6 +10,23 @@
   </div>
 </section>
 
+{% if pinned %}
+<section class="wrap block pinned">
+  <h2 class="section-title">Pinned</h2>
+  <div class="pin-list">{% for v in pinned %}
+    <article class="card card-pinned kind-{{ v.kind }}">
+      {% if v.hero_url %}<a class="card-img" href="{{ v.url }}"><img src="{{ v.hero_url | safe }}" alt="" loading="lazy"></a>{% endif %}
+      <div class="card-body">
+        <p class="eyebrow">{{ v.kind_label }}{% if v.date_human %} · <time datetime="{{ v.date_iso }}">{{ v.date_human }}</time>{% endif %}</p>
+        <h3><a href="{{ v.url }}">{{ v.title }}</a></h3>
+        {% if v.summary %}<p>{{ v.summary }}</p>{% endif %}
+        {% if v.area_links %}<p class="chips">{% for a in v.area_links %}<a class="chip" href="{{ a.url }}">{{ a.title }}</a>{% endfor %}</p>{% endif %}
+      </div>
+    </article>{% endfor %}
+  </div>
+</section>
+{% endif %}
+
 {% if featured %}
 <section class="wrap block">
   <h2 class="section-title">Featured</h2>

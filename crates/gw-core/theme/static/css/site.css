@@ -76,6 +76,21 @@ img { max-width: 100%; height: auto; }
 .chip:hover { color: var(--ink); }
 .chip.plain { color: var(--muted); }
 
+/* Home: pinned items — wide cards, image beside the text */
+.pin-list { display: grid; gap: 1.1rem; }
+.card-pinned { flex-direction: row; }
+.card-pinned .card-img { flex: 0 0 46%; }
+.card-pinned .card-img img { height: 100%; aspect-ratio: auto; min-height: 220px; }
+.card-pinned .card-body { padding: 1.4rem 1.6rem; align-self: center; }
+.card-pinned h3 { font-size: 1.5rem; }
+.card-pinned p { font-size: 1.02rem; }
+@media (max-width: 720px) {
+  .card-pinned { flex-direction: column; }
+  .card-pinned .card-img img { aspect-ratio: 16 / 9; min-height: 0; }
+  .card-pinned .card-body { padding: 1rem 1.1rem 1.1rem; }
+  .card-pinned h3 { font-size: 1.25rem; }
+}
+
 /* Areas */
 .area-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 1rem; }
 .area-card { display: flex; flex-direction: column; gap: .35rem; padding: 1.1rem 1.15rem; border-radius: var(--radius);

@@ -18,7 +18,7 @@ pub fn item_json(it: &Item) -> Value {
         "id": it.id, "kind": it.kind.as_str(), "title": it.title, "url": it.url, "slug": it.slug,
         "date": it.date.map(|d| d.to_string()), "areas": it.areas, "tags": it.tags,
         "project": it.project, "summary": it.summary, "draft": it.draft, "unlisted": it.unlisted,
-        "featured": it.featured, "repo": it.repo, "app_url": it.app_url, "source": it.source,
+        "featured": it.featured, "pinned": it.pinned, "repo": it.repo, "app_url": it.app_url, "source": it.source,
         "path": it.path.display().to_string(),
     })
 }
