@@ -52,7 +52,7 @@ introduces a body of work, with dated updates beside it in `updates/`.
   link to them instead of repeating them; the project page is the overview, updates are the
   diary. Never edit updates from here — an enhancement changes only the project page, and its
   `updates/` folder is left untouched on accept.
-- Keep `:repo:`, `:featured:`, `:hero:`, `:source:`, areas and tags (accept carries them over
+- Keep `:repo:`, `:featured:`, `:pinned:`, `:hero:`, `:source:`, areas and tags (accept carries them over
   even if you leave them out).
 - A good shape: what it is (one paragraph) · why it exists (inspiration, the problem) · what it
   does · how it works · the hard parts · status and what's next · links (repo, live app, updates).

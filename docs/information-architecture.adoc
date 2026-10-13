@@ -11,7 +11,7 @@ Change the YAML to change the ontology; no code changes are needed.
 |===
 | Section | URL | What is there
 
-| Home | `/` | Who you are in two lines, featured work, latest writing, projects, areas, and the Lab
+| Home | `/` | Who you are in two lines, pinned and featured work, latest writing, projects, areas, and the Lab
 | Articles | `/articles/` | Every post, newest first: articles and project updates
 | Projects | `/projects/` | Long-running work, each with its own timeline of updates; grouped by area (see <<Listing pages>>)
 | Areas | `/areas/` | The ontology: browse by subject
@@ -87,6 +87,7 @@ Rules of thumb:
 | `:status: published` | Built and listed (the default once you run `gw release`).
 | `:visibility: unlisted` | Built, reachable by URL, but `noindex`, and left out of every listing, feed, area page, and the sitemap. Use it for things shared by link only.
 | `:featured:` | Shown in the home page's Featured strip.
+| `:pinned:` | Pinned to the top of the home page, as a wide card (`:pinned: 1`, `:pinned: 2`, … set the order). The home page shows each item once: pinned items are left out of Featured, and pinned and featured items are left out of Latest writing and Projects.
 |===
 
 The books and long documents published under the domain (the AI primer, the math book, the

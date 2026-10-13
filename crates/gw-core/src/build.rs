@@ -267,6 +267,22 @@ pub fn build(site: &Site, opts: &BuildOptions) -> Result<BuildReport> {
     let posts = by_date(listed.iter().filter(|v| v.item.kind.is_post()).cloned().collect());
     let project_views = by_date(listed.iter().filter(|v| v.item.kind == Kind::Project).cloned().collect());
     let apps: Vec<View> = listed.iter().filter(|v| v.item.kind == Kind::App).cloned().collect();
+    // The home page: pinned items first (by their `:pinned:` number, then newest), then featured,
+    // then the latest posts and projects — each section leaves out what an earlier one shows.
+    let mut pinned = by_date(listed.iter().filter(|v| v.item.pinned && v.item.kind != Kind::Page).cloned().collect());
+    pinned.sort_by_key(|v| v.item.pin_order.unwrap_or(i64::MAX));
+    let featured = by_date(listed.iter().filter(|v| v.item.featured && !v.item.pinned && v.item.kind != Kind::Page).cloned().collect());
+    let on_top: BTreeSet<&str> = pinned.iter().chain(&featured).map(|v| v.item.id.as_str()).collect();
+    let home_posts: Vec<&View> = posts.iter().filter(|v| !on_top.contains(v.item.id.as_str())).take(6).collect();
+    let home_projects: Vec<&View> = project_views.iter().filter(|v| !on_top.contains(v.item.id.as_str())).collect();
+    let home = |c: &mut Ctx| {
+        c.insert("pinned", &pinned);
+        c.insert("featured", &featured);
+        c.insert("posts", &home_posts);
+        c.insert("projects", &home_projects);
+        c.insert("all_posts", &posts);
+        c.insert("all_projects", &project_views);
+    };
     let playgrounds = by_date(listed.iter().filter(|v| v.item.kind == Kind::Playground).cloned().collect());
     let mut tools: Vec<View> = listed.iter().filter(|v| v.item.kind == Kind::Tool).cloned().collect();
     tools.sort_by(|a, b| a.item.title.to_lowercase().cmp(&b.item.title.to_lowercase()));
@@ -361,8 +377,11 @@ pub fn build(site: &Site, opts: &BuildOptions) -> Result<BuildReport> {
         let mut c = base(&it.url, &it.title, it.unlisted || it.draft);
         c.insert("item", v);
         c.insert("posts", &posts.iter().take(6).collect::<Vec<_>>());
-        c.insert("featured", &listed.iter().filter(|x| x.item.featured && x.item.kind != Kind::Page).collect::<Vec<_>>());
+        c.insert("featured", &featured);
         c.insert("projects", &project_views);
+        if tpl == "home.html" {
+            home(&mut c);
+        }
         c.insert("apps", &apps);
         c.insert("tools", &tools);
         if it.kind == Kind::Project {
@@ -398,10 +417,9 @@ pub fn build(site: &Site, opts: &BuildOptions) -> Result<BuildReport> {
         warnings.push("no home page (content/pages/home.adoc); using the template alone".into());
         let mut c = base("/", &cfg.site.title, false);
         c.insert("item", &serde_json::json!({"title": cfg.site.title, "html": ""}));
-        c.insert("posts", &posts.iter().take(6).collect::<Vec<_>>());
-        c.insert("featured", &listed.iter().filter(|x| x.item.featured).collect::<Vec<_>>());
-        c.insert("projects", &project_views);
+        home(&mut c);
         c.insert("apps", &apps);
+        c.insert("tools", &tools);
         write("index.html", tera.render("home.html", &c)?, &mut files)?;
     }
 

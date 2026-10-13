@@ -317,6 +317,37 @@ mod tests {
     }
 
     #[test]
+    fn home_pins_then_features_then_latest_without_repeats() {
+        let d = tmp("pins");
+        let o = InitOptions { title: "T".into(), author: "A".into(), base_url: "https://x.test".into(), copy_theme: false, no_starter: true, ..Default::default() };
+        init(&d, &o).unwrap();
+        let post = |slug: &str, date: &str, extra: &str| {
+            std::fs::write(
+                d.join(format!("content/articles/{slug}.adoc")),
+                format!("= {slug}\n:type: article\n:date: {date}\n:status: published\n{extra}\nText.\n"),
+            )
+            .unwrap();
+        };
+        post("old-pin", "2020-01-01", ":pinned:\n");
+        post("first-pin", "2021-01-01", ":pinned: 1\n");
+        post("starred", "2026-03-01", ":featured: true\n");
+        post("both", "2026-02-01", ":featured: true\n:pinned: 2\n");
+        post("plain", "2026-01-01", "");
+        let site = Site::open(Some(&d)).unwrap();
+        build(&site, &BuildOptions { drafts: false, out_dir: Some(d.join("dist")) }).unwrap();
+        let h = std::fs::read_to_string(d.join("dist/index.html")).unwrap();
+        let at = |s: &str| h.find(&format!(">{s}</a></h3>")).unwrap_or_else(|| panic!("{s} missing"));
+        for s in ["old-pin", "first-pin", "starred", "both", "plain"] {
+            assert_eq!(h.matches(&format!(">{s}</a></h3>")).count(), 1, "{s} shown once");
+        }
+        // Numbered pins first, then unnumbered; then featured; then the latest.
+        assert!(at("first-pin") < at("both") && at("both") < at("old-pin"));
+        assert!(at("old-pin") < at("starred") && at("starred") < at("plain"));
+        assert!(h.find(">Pinned</h2>").unwrap() < at("first-pin"));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
     fn pages_urls() {
         assert_eq!(pages_url("octocat/octocat.github.io").as_deref(), Some("https://octocat.github.io"));
         assert_eq!(pages_url("octocat/blog").as_deref(), Some("https://octocat.github.io/blog"));
