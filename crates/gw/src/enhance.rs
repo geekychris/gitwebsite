@@ -7,7 +7,6 @@
 
 use crate::stories::{self, actor, story_json, PREVIEW_BASE};
 use anyhow::{bail, Context, Result};
-use gw_core::build::{build, BuildOptions};
 use gw_core::enhance::{self as core, ClaudeRun, KEY_QUESTIONS};
 use gw_core::story::{ChangeNote, Story};
 use gw_core::Site;
@@ -156,7 +155,7 @@ pub fn proposal(site: &Site, slug: &str) -> Result<Value> {
 }
 
 fn rebuild_preview(site: &Site, v: &mut Value) {
-    match build(site, &BuildOptions { drafts: true, out_dir: Some(site.cache_dir().join("preview")) }) {
+    match crate::server::build_preview(site) {
         Ok(b) => v["preview_built"] = json!(b.pages),
         Err(e) => v["preview_error"] = json!(format!("{e:#}")),
     }

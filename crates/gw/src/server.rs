@@ -17,7 +17,7 @@ use axum::{
     routing::{get, patch, post},
     Json, Router,
 };
-use gw_core::build::{build, BuildOptions};
+use gw_core::build::{build, BuildOptions, BuildReport};
 use gw_core::media::Media;
 use gw_core::registry::Entry;
 use gw_core::Site;
@@ -25,7 +25,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, UNIX_EPOCH};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
 const UI_INDEX: &str = include_str!("../../../ui/index.html");
@@ -298,7 +299,7 @@ async fn do_build(State(st): State<AppState>, body: Option<Json<BuildBody>>) -> 
     with_site(&st, move |s| {
         if drafts {
             // The preview build: drafts included, written where /preview/ serves from.
-            let r = build(s, &BuildOptions { drafts: true, out_dir: Some(preview.clone()) })?;
+            let r = build_preview_into(s, preview.clone())?;
             Ok(json!({
                 "out_dir": r.out_dir.display().to_string(), "pages": r.pages, "items": r.items,
                 "files": r.files.len(), "drafts_included": true, "warnings": r.warnings, "preview": "/preview/",
@@ -902,7 +903,10 @@ async fn dictate() -> Response {
 // ------------------------------------------------------------------ server
 
 pub fn router(site_root: Option<PathBuf>) -> Router {
-    let st = AppState { root: Arc::new(RwLock::new(site_root)) };
+    router_for(AppState { root: Arc::new(RwLock::new(site_root)) })
+}
+
+fn router_for(st: AppState) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::predicate(|origin, _| {
             origin.to_str().map(|o| o.starts_with("http://127.0.0.1") || o.starts_with("http://localhost") || o.starts_with("tauri://")).unwrap_or(false)
@@ -979,14 +983,71 @@ pub fn router(site_root: Option<PathBuf>) -> Router {
         .with_state(st)
 }
 
+/// Fingerprint of the site's sources when the preview was last built (`None` before the first build).
+/// Every preview build goes through [`build_preview`], so one at a time writes the folder.
+static PREVIEW: Mutex<Option<u64>> = Mutex::new(None);
+
+/// Build the draft-inclusive preview in `<site>/.gw-cache/preview`.
+pub fn build_preview(site: &Site) -> Result<BuildReport> {
+    build_preview_into(site, site.cache_dir().join("preview"))
+}
+
+fn build_preview_into(site: &Site, out: PathBuf) -> Result<BuildReport> {
+    let mut last = PREVIEW.lock().unwrap_or_else(|e| e.into_inner());
+    let fp = fingerprint(&site.root);
+    let r = build(site, &BuildOptions { drafts: true, out_dir: Some(out) })?;
+    *last = Some(fp);
+    Ok(r)
+}
+
+/// A hash of every source file's path, size and modification time. Dot folders (`.gw-cache`,
+/// `.git`), build output and story workspaces don't affect the preview, so they are skipped.
+fn fingerprint(root: &Path) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    let skip = |e: &walkdir::DirEntry| {
+        let n = e.file_name().to_string_lossy();
+        e.depth() > 0 && (n.starts_with('.') || (e.depth() == 1 && matches!(n.as_ref(), "dist" | "stories")) || n == "node_modules")
+    };
+    for e in walkdir::WalkDir::new(root).sort_by_file_name().into_iter().filter_entry(|e| !skip(e)).flatten() {
+        if let Ok(m) = e.metadata() {
+            e.path().hash(&mut h);
+            m.len().hash(&mut h);
+            m.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_nanos()).hash(&mut h);
+        }
+    }
+    h.finish()
+}
+
 /// Build the draft-inclusive preview once (errors are reported, not fatal).
 fn initial_preview(root: &Path) {
-    match Site::open(Some(root)).and_then(|s| {
-        build(&s, &BuildOptions { drafts: true, out_dir: Some(root.join(".gw-cache").join("preview")) })
-    }) {
+    match Site::open(Some(root)).and_then(|s| build_preview(&s)) {
         Ok(r) => eprintln!("preview: built {} pages", r.pages),
         Err(e) => eprintln!("preview: build failed: {e:#}"),
     }
+}
+
+/// Rebuild the preview whenever the site's files change on disk, however they changed: the app,
+/// an editor, `git pull`, a merge. Waits for the files to stop changing first, so a checkout that
+/// touches many files builds once.
+fn watch_preview(st: AppState) {
+    std::thread::spawn(move || {
+        let mut seen: Option<(PathBuf, u64)> = None;
+        loop {
+            std::thread::sleep(Duration::from_secs(2));
+            let Ok(root) = st.root() else { continue };
+            let fp = fingerprint(&root);
+            let built = *PREVIEW.lock().unwrap_or_else(|e| e.into_inner());
+            let settled = matches!(&seen, Some((r, f)) if *r == root && *f == fp);
+            seen = Some((root.clone(), fp));
+            if built.is_some() && built != Some(fp) && settled {
+                match Site::open(Some(&root)).and_then(|s| build_preview(&s)) {
+                    Ok(r) => eprintln!("preview: files changed, rebuilt {} pages", r.pages),
+                    Err(e) => eprintln!("preview: rebuild failed: {e:#}"),
+                }
+            }
+        }
+    });
 }
 
 /// Serve the REST API at /api, the management UI at /app, and the built site at /preview.
@@ -1010,6 +1071,8 @@ pub async fn serve_on(site_root: Option<PathBuf>, listener: tokio::net::TcpListe
     if open {
         let _ = open::that(&url);
     }
-    axum::serve(listener, router(site_root)).await?;
+    let st = AppState { root: Arc::new(RwLock::new(site_root)) };
+    watch_preview(st.clone());
+    axum::serve(listener, router_for(st)).await?;
     Ok(())
 }
