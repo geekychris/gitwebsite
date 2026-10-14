@@ -1372,12 +1372,10 @@ name = "gitwebsite-app"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "block2",
  "gw",
  "gw-core",
  "objc2",
  "objc2-app-kit",
- "objc2-foundation",
  "serde_json",
  "tauri",
  "tauri-build",

@@ -17,9 +17,6 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
-#[cfg(target_os = "macos")]
-mod photo_drop;
-
 fn site_root() -> Option<PathBuf> {
     gw_core::userconfig::resolve_site().ok().filter(|p| p.join("site.yaml").exists())
 }
@@ -108,25 +105,26 @@ fn main() {
                 .title("gitwebsite")
                 .inner_size(1400.0, 900.0)
                 .min_inner_size(900.0, 600.0)
-                // Let the page handle drops itself (photos onto a story from Finder); Tauri's own
-                // handler would swallow them. Promised files (Photos) are caught natively below.
+                // Let the page handle drops itself (photos onto a story, from Finder or Photos);
+                // Tauri's own handler would swallow them.
                 .disable_drag_drop_handler()
+                // The window only ever shows the app. Anything else — a file dropped where the
+                // page doesn't take it (WebKit would open it in place, with no way back), or a
+                // link to another site — opens in the default browser instead.
+                .on_navigation({
+                    let base = base.clone();
+                    move |url| {
+                        if url.as_str().starts_with(&base) || matches!(url.scheme(), "about" | "blob") {
+                            return true;
+                        }
+                        if matches!(url.scheme(), "http" | "https") {
+                            let u = url.to_string();
+                            std::thread::spawn(move || open_url(&u));
+                        }
+                        false
+                    }
+                })
                 .build()?;
-
-            #[cfg(target_os = "macos")]
-            if let Some(w) = app.get_webview_window("main") {
-                let target = w.clone();
-                let _ = w.with_webview(move |wv| {
-                    photo_drop::install(wv.inner(), move |paths, errors| {
-                        let js = format!(
-                            "window.gwDroppedPaths && window.gwDroppedPaths({}, {})",
-                            serde_json::to_string(&paths).unwrap_or_else(|_| "[]".into()),
-                            serde_json::to_string(&errors).unwrap_or_else(|_| "[]".into())
-                        );
-                        let _ = target.eval(&js);
-                    });
-                });
-            }
 
             #[cfg(target_os = "macos")]
             {
@@ -135,6 +133,7 @@ fn main() {
                     let _ = handle.run_on_main_thread(start_dictation);
                 });
             }
+
 
             // Menu bar icon and menu.
             let status = MenuItem::with_id(app, "status", "gitwebsite is running", false, None::<&str>)?;
