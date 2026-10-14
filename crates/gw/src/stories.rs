@@ -6,7 +6,6 @@
 
 use crate::integrations::smugmug::{self, Auth};
 use anyhow::{bail, Context, Result};
-use gw_core::build::{build, BuildOptions};
 use gw_core::story::{self, parse_smugmug, ChangeNote, NewStory, Remote, SheetTile, SmugRef, Story, StoryImage, StoryUpdate};
 use gw_core::Site;
 use serde::Deserialize;
@@ -841,7 +840,7 @@ pub fn draft(site: &Site, slug: &str, text: &str, preview: bool) -> Result<Value
     let mut v = json!(r);
     v["preview_url"] = json!(format!("{PREVIEW_BASE}{}", r.url));
     if preview {
-        match build(site, &BuildOptions { drafts: true, out_dir: Some(site.cache_dir().join("preview")) }) {
+        match crate::server::build_preview(site) {
             Ok(b) => v["preview_built"] = json!(b.pages),
             Err(e) => v["preview_error"] = json!(format!("{e:#}")),
         }
