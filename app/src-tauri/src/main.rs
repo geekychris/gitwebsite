@@ -105,6 +105,9 @@ fn main() {
                 .title("gitwebsite")
                 .inner_size(1400.0, 900.0)
                 .min_inner_size(900.0, 600.0)
+                // Let the page handle drops itself (photos onto a story, from Finder or Photos);
+                // Tauri's own handler would swallow them.
+                .disable_drag_drop_handler()
                 .build()?;
 
             #[cfg(target_os = "macos")]

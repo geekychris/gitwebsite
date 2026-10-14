@@ -448,6 +448,110 @@ pub fn add_dir(site: &Site, slug: &str, a: &AddDirArgs) -> Result<Value> {
     }))
 }
 
+#[derive(Debug, Default, Deserialize)]
+pub struct AddPhotosArgs {
+    /// An album id from `photos_albums`; without one, the photos selected in Photos now.
+    #[serde(default)]
+    pub album: Option<String>,
+    /// Add as candidates to choose from (the default for an album) rather than as chosen photos
+    /// (the default for a selection).
+    #[serde(default)]
+    pub candidate: Option<bool>,
+    /// At most this many photos from an album (default 300).
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+/// Bring photos in from Apple Photos (macOS): the photos selected in Photos, or an album.
+/// Photos exports the current versions (edits applied) as JPEG. A selection is added as chosen
+/// photos (each still needs a comment); an album's photos are offered as candidates, kept in
+/// `~/.gitwebsite/cache/stories/<slug>/photos/<album>/` until chosen. Videos are skipped.
+pub fn add_photos(site: &Site, slug: &str, a: &AddPhotosArgs) -> Result<Value> {
+    use crate::integrations::photos::{self, Pick};
+    Story::load(site, slug)?;
+    let album = a.album.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let candidate = a.candidate.unwrap_or(album.is_some());
+    let tmp = std::env::temp_dir().join(format!("gw-photos-{}-{}", std::process::id(), chrono::Local::now().timestamp_nanos_opt().unwrap_or(0)));
+    let pick = match album {
+        Some(id) => Pick::Album { id, limit: a.limit.unwrap_or(300) },
+        None => Pick::Selection,
+    };
+    let exported = photos::export(&pick, &tmp);
+    let result = (|| -> Result<Value> {
+        let exported = exported?;
+        let found = story::scan_dir(&tmp, false, None, None)?;
+        let videos = found.videos.len();
+        // Candidates must stay on disk until chosen: keep them in a folder per album (or per
+        // import of a selection), and reuse a file of the same name so a re-import doesn't repeat.
+        let keep = story::cache_dir(slug).join("photos").join(match album {
+            Some(id) => id.split('/').next().unwrap_or(id).to_string(),
+            None => format!("selection-{}", chrono::Local::now().format("%Y%m%d-%H%M%S")),
+        });
+        let mut items = vec![];
+        for (p, taken) in found.photos {
+            if candidate {
+                std::fs::create_dir_all(&keep)?;
+                let dest = keep.join(p.file_name().context("no file name")?);
+                if !dest.exists() {
+                    std::fs::rename(&p, &dest).or_else(|_| std::fs::copy(&p, &dest).map(|_| ()))?;
+                }
+                items.push((dest, taken));
+            } else {
+                items.push((p, taken));
+            }
+        }
+        let ((added, already), s) = modify(site, slug, |s| {
+            let mut added = vec![];
+            let mut already = 0;
+            for (p, taken) in &items {
+                if candidate {
+                    match s.add_path_candidate(p, taken.clone()) {
+                        Some(im) => added.push(im),
+                        None => already += 1,
+                    }
+                } else {
+                    // The same Photos picture imported again: same file name and capture time.
+                    let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                    if s.images.iter().any(|i| i.filename == name && i.taken.is_some() && &i.taken == taken) {
+                        already += 1;
+                        continue;
+                    }
+                    let mut im = s.add_file(site, p, "", "")?;
+                    if im.taken.is_none() && taken.is_some() {
+                        im.taken = taken.clone();
+                        if let Ok(x) = s.image_mut(&im.id) { x.taken = taken.clone(); }
+                    }
+                    added.push(im);
+                }
+            }
+            let ids: Vec<String> = added.iter().map(|i: &StoryImage| i.id.clone()).collect();
+            let from = if album.is_some() { "an Apple Photos album" } else { "the Apple Photos selection" };
+            let what = format!("added {} {} from {from} {}", ids.len(), if candidate { "candidate" } else { "photo" }.to_string() + if ids.len() == 1 { "" } else { "s" }, numbers(s, &ids));
+            Ok(((added, already), ChangeNote::new(if candidate { "candidates" } else { "images" }, what).ids(ids)))
+        })?;
+        for im in &added {
+            let _ = s.thumb_local(site, im);
+        }
+        Ok(json!({
+            "story": s.slug, "rev": s.rev,
+            "exported": exported,
+            "added": added.len(),
+            "as": if candidate { "candidates" } else { "selected" },
+            "numbers": numbers(&s, &added.iter().map(|i| i.id.clone()).collect::<Vec<_>>()),
+            "already_in_story": already,
+            "videos_skipped": videos,
+            "next": if candidate { format!("gw story contact-sheet {} --candidates", s.slug) } else { format!("Each chosen photo needs a comment: gw story comment {} <number> \"…\"", s.slug) },
+        }))
+    })();
+    let _ = std::fs::remove_dir_all(&tmp);
+    result
+}
+
+/// The albums in Apple Photos (macOS), for choosing one to import.
+pub fn photos_albums() -> Result<Value> {
+    Ok(json!({ "albums": crate::integrations::photos::albums()? }))
+}
+
 /// Add one uploaded file (from the app).
 pub fn upload(site: &Site, slug: &str, name: &str, bytes: &[u8], caption: &str, comment: &str) -> Result<Value> {
     let (im, s) = modify(site, slug, |s| {

@@ -13,6 +13,13 @@ interview with Claude. Example: "Creating the Amiga 40th exhibit".
    disabled until every selected photo has one. Re-opening the picker on the same album shows what
    is already in the story, so comments can be edited or photos removed;
 ** *Add links…*: image URLs, SmugMug links, `smugmug:<ImageKey>`, or `media:<key>`.
+** *From Apple Photos…* (macOS): the photos you have selected in the Photos app, added as
+   chosen photos, or an album, offered as candidates. Photos exports the current versions (your
+   edits applied) as JPEG; videos are skipped, and importing the same photos again adds nothing new.
+   The first time, macOS asks whether gitwebsite may control Photos. From the command line:
+   `gw story add-photos <slug>` (the selection) or `--album "Trips / Iceland"`, and
+   `gw story photos-albums`; MCP `story_add_photos` and `photos_albums`. You can also drag photos
+   from Photos or Finder onto the story page.
 . *Interview* — run `/project-story <slug>` in Claude Code. Claude looks at every photo, reads
   your notes and comments, and asks a few questions at a time, recording each answer in the
   story's transcript.
@@ -86,6 +93,8 @@ gw story draft amiga-40th-exhibit --file draft.adoc
 
 # the project interview
 gw story add-dir amiga-40th-exhibit ~/Pictures/Amiga40 --recursive
+gw story add-photos amiga-40th-exhibit                        # what is selected in Apple Photos
+gw story add-photos amiga-40th-exhibit --album "Amiga 40th"   # an album, as candidates
 gw story add-smugmug amiga-40th-exhibit https://<you>.smugmug.com/Events/Amiga-40/n-XXXX
 gw story contact-sheet amiga-40th-exhibit        # numbered JPEG; --open, --page 2, --selected
 gw story select amiga-40th-exhibit 3,7-9 --comment "…"     # or select, then `comment <n> "…"`

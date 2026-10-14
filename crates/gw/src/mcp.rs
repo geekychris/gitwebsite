@@ -139,6 +139,12 @@ fn tools() -> Value {
         {"name": "story_add_dir", "description": "Offer every photo in local folders as numbered candidates (left where they are until selected; videos reported, not added). Then show a contact sheet and let the author choose by number.",
          "inputSchema": s(json!({"slug": str_("Story slug"), "dirs": arr("Absolute folder paths"), "recursive": {"type": "boolean"},
             "since": str_("Only photos taken on/after YYYY-MM-DD"), "limit": {"type": "integer", "description": "At most N per folder"}}), &["slug", "dirs"])},
+        {"name": "story_add_photos", "description": "macOS: bring photos in from Apple Photos — the photos the author has selected in the Photos app (added as chosen photos, each still needing a comment), or an album by id from photos_albums (offered as numbered candidates). Photos exports current versions with edits as JPEG; videos are skipped. Ask the author to select the photos in Photos first.",
+         "inputSchema": s(json!({"slug": str_("Story slug"), "album": str_("Album id from photos_albums; omit for the current selection in Photos"),
+            "candidate": {"type": "boolean", "description": "Add as candidates (default for an album) or as chosen photos (default for a selection)"},
+            "limit": {"type": "integer", "description": "At most N photos from an album (default 300)"}}), &["slug"])},
+        {"name": "photos_albums", "description": "macOS: list the albums in Apple Photos (name with folder path, id, item count) for story_add_photos.",
+         "inputSchema": s(json!({}), &[])},
         {"name": "story_add_smugmug", "description": "Offer the photos on SmugMug pages (album/gallery/photo URLs, album:<AlbumKey>) as numbered candidates. Read-only on SmugMug.",
          "inputSchema": s(json!({"slug": str_("Story slug"), "targets": arr("SmugMug URLs or album:<key>")}), &["slug", "targets"])},
         {"name": "story_contact_sheet", "description": "Render a numbered contact sheet JPEG (candidates by default) and return its `path` (open it with your image viewer/Read tool) and the number→image list. The author picks by number.",
@@ -272,6 +278,8 @@ fn call(root: &PathBuf, name: &str, a: &Value) -> Result<Value> {
             a.get("count").and_then(|v| v.as_u64()).unwrap_or(100) as usize,
         ),
         "story_add_dir" => stories::add_dir(&site, req(a, "slug")?, &serde_json::from_value(a.clone()).context("bad arguments")?),
+        "story_add_photos" => stories::add_photos(&site, req(a, "slug")?, &serde_json::from_value(a.clone()).context("bad arguments")?),
+        "photos_albums" => stories::photos_albums(),
         "story_add_smugmug" => {
             let targets: Vec<String> = serde_json::from_value(a.get("targets").cloned().context("missing `targets`")?).context("bad targets")?;
             stories::add(&site, req(a, "slug")?, &stories::AddArgs { sources: targets, caption: None, comment: None, candidate: true })

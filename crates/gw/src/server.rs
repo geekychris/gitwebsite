@@ -411,6 +411,12 @@ async fn story_get(State(st): State<AppState>, AxPath(slug): AxPath<String>, Que
 async fn story_add_dir(State(st): State<AppState>, AxPath(slug): AxPath<String>, Json(a): Json<stories::AddDirArgs>) -> ApiResult {
     with_site(&st, move |s| stories::add_dir(s, &slug, &a)).await
 }
+async fn story_add_photos(State(st): State<AppState>, AxPath(slug): AxPath<String>, Json(a): Json<stories::AddPhotosArgs>) -> ApiResult {
+    with_site(&st, move |s| stories::add_photos(s, &slug, &a)).await
+}
+async fn photos_albums(State(st): State<AppState>) -> ApiResult {
+    with_site(&st, |_| stories::photos_albums()).await
+}
 
 #[derive(Deserialize)]
 struct SheetQuery {
@@ -937,6 +943,7 @@ pub fn router(site_root: Option<PathBuf>) -> Router {
         .route("/api/stories/{slug}/review-images", post(story_review))
         .route("/api/stories/{slug}/smugmug-pick", post(story_pick))
         .route("/api/stories/{slug}/add-dir", post(story_add_dir))
+        .route("/api/stories/{slug}/add-photos", post(story_add_photos))
         .route("/api/stories/{slug}/contact-sheet", get(story_sheet))
         .route("/api/stories/{slug}/contact-sheet.jpg", get(story_sheet_jpg))
         .route("/api/stories/{slug}/select", post(story_select))
@@ -958,6 +965,7 @@ pub fn router(site_root: Option<PathBuf>) -> Router {
         .route("/api/stories/{slug}/request-changes", post(story_request_changes))
         .route("/api/stories/{slug}/claude", get(story_claude_status).post(story_claude_start).delete(story_claude_stop))
         .route("/api/smugmug/albums", get(smugmug_albums))
+        .route("/api/photos/albums", get(photos_albums))
         .route("/api/smugmug/browse", get(smugmug_browse))
         .route("/app", get(|| async { Redirect::permanent("/app/") }))
         .route("/app/", get(ui))

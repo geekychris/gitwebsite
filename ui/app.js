@@ -31,6 +31,42 @@ async function guard(fn) {
 // ---------------------------------------------------------------- modal forms
 
 /** Show a form; fields: [{name, label, type, value, options, multiple, rows, full}]. Resolves to values or null. */
+/** Bring photos in from Apple Photos (macOS): the ones selected in Photos, or an album. */
+let photosAlbums = null;
+async function fromApplePhotos(slug, reload) {
+  const v = await form('Add from Apple Photos', [
+    { type: 'note', text: 'Photos exports the current versions (with your edits) as JPEG. The first time, macOS asks whether gitwebsite may control Photos — allow it.' },
+    { name: 'from', label: 'Which photos', type: 'select', value: 'selection', options: [['selection', 'The photos selected in Photos now'], ['album', 'An album…']] },
+  ], 'Next');
+  if (!v) return;
+  const base = `/stories/${encodeURIComponent(slug)}/add-photos`;
+  if (v.from === 'selection') {
+    return guard(async () => {
+      toast('Exporting from Photos…');
+      const r = await api('POST', base, {});
+      toast(`Added ${r.added} photo${r.added === 1 ? '' : 's'} from Photos${r.videos_skipped ? ` (${r.videos_skipped} video${r.videos_skipped === 1 ? '' : 's'} skipped)` : ''} — give each a comment`);
+      reload();
+    });
+  }
+  if (!photosAlbums) {
+    toast('Reading your albums from Photos…');
+    try { photosAlbums = (await api('GET', '/photos/albums')).albums; } catch (e) { return toast(e.message, true); }
+  }
+  if (!photosAlbums.length) return toast('No albums in Photos', true);
+  const a = await form('Add an album from Apple Photos', [
+    { name: 'album', label: 'Album', type: 'select', value: photosAlbums[0].id, options: photosAlbums.map(x => [x.id, `${x.name} (${x.count})`]) },
+    { name: 'candidate', label: 'Offer them as candidates to choose from (untick to add them all as chosen photos)', type: 'checkbox', value: true },
+    { name: 'limit', label: 'At most this many photos', type: 'number', value: '300' },
+  ], 'Add');
+  if (!a) return;
+  guard(async () => {
+    toast('Exporting the album from Photos…');
+    const r = await api('POST', base, { album: a.album, candidate: a.candidate, limit: Math.max(1, parseInt(a.limit, 10) || 300) });
+    toast(`Added ${r.added} ${r.as === 'candidates' ? 'candidate' : 'photo'}${r.added === 1 ? '' : 's'}${r.already_in_story ? `, ${r.already_in_story} already in the story` : ''}${r.videos_skipped ? `, ${r.videos_skipped} video${r.videos_skipped === 1 ? '' : 's'} skipped` : ''}`);
+    reload();
+  });
+}
+
 function form(title, fields, okLabel = 'Save') {
   const dlg = $('[data-modal]');
   const f = $('[data-modal-form]');
@@ -525,6 +561,7 @@ async function viewStoryLegacy(slug) {
     <div class="drop" data-drop tabindex="0">
       <strong>Drop photos here</strong>, paste them, or <button data-pick-files>choose files</button>
       · <a class="btn primary" href="#story/${esc(slug)}/smugmug">Pick from SmugMug</a>
+      · <button data-photos>From Apple Photos…</button>
       · <button data-add-links>Add links…</button>
       <input type="file" accept="image/*,.heic,.heif" multiple hidden data-files>
       <div class="uploads" data-uploads></div>
@@ -579,6 +616,7 @@ async function viewStoryLegacy(slug) {
     if (!failed) reload(); else toast(`${failed} file(s) could not be added`, true);
   };
   $('[data-pick-files]').onclick = e => { e.preventDefault(); files.click(); };
+  $('[data-photos]').onclick = e => { e.preventDefault(); fromApplePhotos(slug, reload); };
   files.onchange = () => send(files.files);
   drop.ondragover = e => { if ([...e.dataTransfer.types].includes('Files')) { e.preventDefault(); drop.classList.add('over'); } };
   drop.ondragleave = () => drop.classList.remove('over');
@@ -809,7 +847,7 @@ function renderStory(slug, s) {
       </div>`).join('') || '<p class="empty">None yet — choose from the candidates below, drop photos here, or pick from SmugMug.</p>'}</div>
     <div class="drop" data-drop tabindex="0">
       <strong>Drop photos here</strong> to add them straight to the story, paste them, or <button data-pick-files>choose files</button>
-      · <a class="btn primary" href="#story/${esc(slug)}/smugmug">Pick from SmugMug</a> · <button data-add-links>Add links…</button>
+      · <a class="btn primary" href="#story/${esc(slug)}/smugmug">Pick from SmugMug</a> · <button data-photos>From Apple Photos…</button> · <button data-add-links>Add links…</button>
       <input type="file" accept="image/*,.heic,.heif" multiple hidden data-files>
       <div class="uploads" data-uploads></div>
     </div>
@@ -927,6 +965,7 @@ function renderStory(slug, s) {
     if (!failed) reload(); else toast(`${failed} file(s) could not be added`, true);
   };
   $('[data-pick-files]').onclick = e => { e.preventDefault(); files.click(); };
+  $('[data-photos]').onclick = e => { e.preventDefault(); fromApplePhotos(slug, reload); };
   files.onchange = () => send(files.files);
   drop.ondragover = e => { if ([...e.dataTransfer.types].includes('Files')) { e.preventDefault(); drop.classList.add('over'); } };
   drop.ondragleave = () => drop.classList.remove('over');
