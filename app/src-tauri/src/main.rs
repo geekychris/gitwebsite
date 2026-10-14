@@ -105,6 +105,25 @@ fn main() {
                 .title("gitwebsite")
                 .inner_size(1400.0, 900.0)
                 .min_inner_size(900.0, 600.0)
+                // Let the page handle drops itself (photos onto a story, from Finder or Photos);
+                // Tauri's own handler would swallow them.
+                .disable_drag_drop_handler()
+                // The window only ever shows the app. Anything else — a file dropped where the
+                // page doesn't take it (WebKit would open it in place, with no way back), or a
+                // link to another site — opens in the default browser instead.
+                .on_navigation({
+                    let base = base.clone();
+                    move |url| {
+                        if url.as_str().starts_with(&base) || matches!(url.scheme(), "about" | "blob") {
+                            return true;
+                        }
+                        if matches!(url.scheme(), "http" | "https") {
+                            let u = url.to_string();
+                            std::thread::spawn(move || open_url(&u));
+                        }
+                        false
+                    }
+                })
                 .build()?;
 
             #[cfg(target_os = "macos")]
@@ -114,6 +133,7 @@ fn main() {
                     let _ = handle.run_on_main_thread(start_dictation);
                 });
             }
+
 
             // Menu bar icon and menu.
             let status = MenuItem::with_id(app, "status", "gitwebsite is running", false, None::<&str>)?;

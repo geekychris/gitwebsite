@@ -5,6 +5,7 @@
 pub mod html2adoc;
 pub mod keychain;
 pub mod oauth1;
+pub mod photos;
 pub mod smugmug;
 pub mod wordpress;
 pub mod xmlrpc;

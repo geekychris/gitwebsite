@@ -1,6 +1,6 @@
 ---
 name: project-story
-description: Run a project interview with the user and turn it into a story for their website (gitwebsite) — they give you photos (pasted images, folders on their Mac, SmugMug album links), choose the ones that matter with a comment each, tell the story roughly, and you interview them, then outline and draft the post. Use when the user says "let's do a project interview", "project interview", "interview me about a project/build/event", "set up a project story", "write up the story of …" from photos, runs /project-story, or names a story slug from the gitwebsite app's Stories section (e.g. "creating the Amiga 40th exhibit").
+description: Run a project interview with the user and turn it into a story for their website (gitwebsite) — they give you photos (pasted images, folders on their Mac, Apple Photos selections or albums, SmugMug album links), choose the ones that matter with a comment each, tell the story roughly, and you interview them, then outline and draft the post. Use when the user says "let's do a project interview", "project interview", "interview me about a project/build/event", "set up a project story", "write up the story of …" from photos, runs /project-story, or names a story slug from the gitwebsite app's Stories section (e.g. "creating the Amiga 40th exhibit").
 ---
 
 # project-story — the project interview
@@ -54,6 +54,8 @@ never modified):
 ```console
 gw story add-dir <slug> ~/Pictures/Amiga40 [--recursive] [--since 2025-10-01] [--limit 200]
 gw story add-smugmug <slug> https://<user>.smugmug.com/…/n-XXXX      # read-only on SmugMug
+gw story add-photos <slug>                      # Apple Photos (macOS): what they have selected there, as chosen photos
+gw story add-photos <slug> --album "Name"       # an Apple Photos album, as candidates (gw story photos-albums lists them)
 gw story add <slug> /path/to/pasted.png --candidate
 ```
 
@@ -172,6 +174,7 @@ rewrites the same post).
 | `gw story set <slug> --title/--target/--project/--area/--tag/--status` | `story_update` |
 | `gw story add-dir <slug> <dirs…> [--recursive --since --limit]` | `story_add_dir` |
 | `gw story add-smugmug <slug> <links…>` | `story_add_smugmug` |
+| `gw story add-photos <slug> [--album NAME] [--candidate\|--chosen] [--limit N]`, `photos-albums` | `story_add_photos`, `photos_albums` |
 | `gw story add <slug> <files/URLs/refs> [--candidate] [--caption] [--comment]` | `story_add_images` |
 | `gw story contact-sheet <slug> [--selected/--rejected/--all] [--page N]`, `open-sheet` | `story_contact_sheet` |
 | `gw story select <slug> 3,7-9 [--comment …]`, `unselect`, `reject` | `story_select`, `story_unselect`, `story_reject` |

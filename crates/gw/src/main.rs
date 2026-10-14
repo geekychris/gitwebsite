@@ -249,6 +249,26 @@ enum StoryCmd {
         #[arg(long)]
         candidate: bool,
     },
+    /// macOS: bring photos in from Apple Photos — the ones selected in Photos now (added as chosen
+    /// photos), or an album's (offered as candidates). Exports current versions with edits as JPEG.
+    AddPhotos {
+        slug: String,
+        /// An album: its name (as `gw story photos-albums` lists it) or id. Without it, the
+        /// photos selected in Photos.
+        #[arg(long)]
+        album: Option<String>,
+        /// Add as candidates to choose from (the default for an album).
+        #[arg(long, conflicts_with = "chosen")]
+        candidate: bool,
+        /// Add as chosen photos (the default for a selection).
+        #[arg(long)]
+        chosen: bool,
+        /// At most this many photos from an album (default 300).
+        #[arg(long)]
+        limit: Option<usize>,
+    },
+    /// macOS: list the albums in Apple Photos.
+    PhotosAlbums,
     /// Offer every photo in folders as candidates (left where they are until selected; videos
     /// are reported, not added). Photos are numbered for `contact-sheet` and `select`.
     AddDir {
@@ -738,6 +758,43 @@ fn main() -> Result<()> {
                 &gw_core::story::StoryUpdate { title, target, project, areas, tags, notes: None, status },
             )?,
             StoryCmd::Add { slug, sources, caption, comment, candidate } => stories::add(&site, &slug, &stories::AddArgs { sources, caption, comment, candidate })?,
+            StoryCmd::AddPhotos { slug, album, candidate, chosen, limit } => {
+                // An album may be given by name or id.
+                let album = match album {
+                    Some(a) if !a.contains("/L0/") => {
+                        let all = gw::integrations::photos::albums()?;
+                        let hits: Vec<_> = all.iter().filter(|x| x.name.eq_ignore_ascii_case(&a) || x.name.rsplit(" / ").next().is_some_and(|n| n.eq_ignore_ascii_case(&a))).collect();
+                        match hits.as_slice() {
+                            [one] => Some(one.id.clone()),
+                            [] => anyhow::bail!("no album called \"{a}\" in Photos (gw story photos-albums lists them)"),
+                            _ => anyhow::bail!("several albums are called \"{a}\": give the full path or the id (gw story photos-albums)"),
+                        }
+                    }
+                    other => other,
+                };
+                let cand = if candidate { Some(true) } else if chosen { Some(false) } else { None };
+                let v = stories::add_photos(&site, &slug, &stories::AddPhotosArgs { album, candidate: cand, limit })?;
+                if !j {
+                    let nums = v["numbers"].as_str().unwrap_or("");
+                    println!("Added {} {} from Apple Photos{}{}.", v["added"], if v["as"] == "candidates" { "candidate photo(s)" } else { "photo(s)" },
+                        if nums.is_empty() { String::new() } else { format!(" {nums}") },
+                        if v["already_in_story"].as_u64().unwrap_or(0) > 0 { format!(" ({} already in the story)", v["already_in_story"]) } else { String::new() });
+                    if v["videos_skipped"].as_u64().unwrap_or(0) > 0 { println!("{} video(s) skipped (stories use photos).", v["videos_skipped"]); }
+                    println!("Next: {}", v["next"].as_str().unwrap_or(""));
+                    return Ok(());
+                }
+                v
+            }
+            StoryCmd::PhotosAlbums => {
+                let v = stories::photos_albums()?;
+                if !j {
+                    for a in v["albums"].as_array().into_iter().flatten() {
+                        println!("{:>5}  {}", a["count"], a["name"].as_str().unwrap_or(""));
+                    }
+                    return Ok(());
+                }
+                v
+            }
             StoryCmd::AddDir { slug, dirs, recursive, since, limit } => {
                 let v = stories::add_dir(&site, &slug, &stories::AddDirArgs { dirs, recursive, since, limit })?;
                 if !j {
