@@ -31,6 +31,28 @@ async function guard(fn) {
 // ---------------------------------------------------------------- modal forms
 
 /** Show a form; fields: [{name, label, type, value, options, multiple, rows, full}]. Resolves to values or null. */
+/** The desktop app catches drops of promised files (photos dragged from Apple Photos, which the
+ *  web view can't read), saves them, and calls this with their paths. */
+window.gwDroppedPaths = (paths, errors) => {
+  document.querySelectorAll('.drop.over').forEach(d => d.classList.remove('over'));
+  if (errors && errors.length) toast(`Photos couldn't hand over ${errors.length} item${errors.length === 1 ? '' : 's'}: ${errors[0]}`, true);
+  if (!paths || !paths.length) return;
+  const m = location.hash.match(/^#story\/([^/]+)$/);
+  if (!m) return toast('Open a story, then drop the photos on it', true);
+  const slug = decodeURIComponent(m[1]);
+  // Stories are photos: videos (and anything else) that came with the drag are left out.
+  const photos = paths.filter(p => /\.(jpe?g|png|webp|heic|heif|tiff?|gif)$/i.test(p));
+  const other = paths.length - photos.length;
+  if (!photos.length) return toast(`No photos in that drop${other ? ` (${other} other file${other === 1 ? '' : 's'}, e.g. videos, left out)` : ''}`, true);
+  guard(async () => {
+    toast(`Adding ${photos.length} photo${photos.length === 1 ? '' : 's'}…`);
+    const r = await api('POST', `/stories/${encodeURIComponent(slug)}/images`, { sources: photos, candidate: false });
+    const skipped = (r.skipped || []).length + other;
+    toast(`Added ${r.added.length} photo${r.added.length === 1 ? '' : 's'}${skipped ? `, left out ${skipped}` : ''} — give each a comment`);
+    route();
+  });
+};
+
 /** Bring photos in from Apple Photos (macOS): the ones selected in Photos, or an album. */
 let photosAlbums = null;
 async function fromApplePhotos(slug, reload) {
@@ -620,7 +642,11 @@ async function viewStoryLegacy(slug) {
   files.onchange = () => send(files.files);
   drop.ondragover = e => { if ([...e.dataTransfer.types].includes('Files')) { e.preventDefault(); drop.classList.add('over'); } };
   drop.ondragleave = () => drop.classList.remove('over');
-  drop.ondrop = e => { if (e.dataTransfer.files.length) { e.preventDefault(); drop.classList.remove('over'); send(e.dataTransfer.files); } };
+  drop.ondrop = e => {
+    e.preventDefault(); drop.classList.remove('over');
+    if (e.dataTransfer.files.length) send(e.dataTransfer.files);
+    else toast('Nothing came through with that drop. From Apple Photos, use “From Apple Photos…” (or drag the photos to Finder first).', true);
+  };
   document.onpaste = e => { if (location.hash === '#story/' + slug && e.clipboardData.files.length) send(e.clipboardData.files); };
   $('[data-add-links]').onclick = async () => {
     const v = await form('Add photos by link', [
@@ -969,7 +995,11 @@ function renderStory(slug, s) {
   files.onchange = () => send(files.files);
   drop.ondragover = e => { if ([...e.dataTransfer.types].includes('Files')) { e.preventDefault(); drop.classList.add('over'); } };
   drop.ondragleave = () => drop.classList.remove('over');
-  drop.ondrop = e => { if (e.dataTransfer.files.length) { e.preventDefault(); drop.classList.remove('over'); send(e.dataTransfer.files); } };
+  drop.ondrop = e => {
+    e.preventDefault(); drop.classList.remove('over');
+    if (e.dataTransfer.files.length) send(e.dataTransfer.files);
+    else toast('Nothing came through with that drop. From Apple Photos, use “From Apple Photos…” (or drag the photos to Finder first).', true);
+  };
   document.onpaste = e => { if (location.hash === '#story/' + slug && e.clipboardData.files.length) send(e.clipboardData.files); };
   $('[data-add-links]').onclick = async () => {
     const v = await form('Add photos by link', [

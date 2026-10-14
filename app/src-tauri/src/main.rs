@@ -17,6 +17,9 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
+#[cfg(target_os = "macos")]
+mod photo_drop;
+
 fn site_root() -> Option<PathBuf> {
     gw_core::userconfig::resolve_site().ok().filter(|p| p.join("site.yaml").exists())
 }
@@ -105,10 +108,25 @@ fn main() {
                 .title("gitwebsite")
                 .inner_size(1400.0, 900.0)
                 .min_inner_size(900.0, 600.0)
-                // Let the page handle drops itself (photos onto a story, from Finder or Photos);
-                // Tauri's own handler would swallow them.
+                // Let the page handle drops itself (photos onto a story from Finder); Tauri's own
+                // handler would swallow them. Promised files (Photos) are caught natively below.
                 .disable_drag_drop_handler()
                 .build()?;
+
+            #[cfg(target_os = "macos")]
+            if let Some(w) = app.get_webview_window("main") {
+                let target = w.clone();
+                let _ = w.with_webview(move |wv| {
+                    photo_drop::install(wv.inner(), move |paths, errors| {
+                        let js = format!(
+                            "window.gwDroppedPaths && window.gwDroppedPaths({}, {})",
+                            serde_json::to_string(&paths).unwrap_or_else(|_| "[]".into()),
+                            serde_json::to_string(&errors).unwrap_or_else(|_| "[]".into())
+                        );
+                        let _ = target.eval(&js);
+                    });
+                });
+            }
 
             #[cfg(target_os = "macos")]
             {
