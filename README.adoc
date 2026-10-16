@@ -85,6 +85,7 @@ All in `docs/` (AsciiDoc; `make docs` renders `docs/index.html`):
 * link:docs/registry-and-ideas.adoc[Registry and ideas]
 * link:docs/interfaces.adoc[Interfaces] — CLI, REST, MCP, desktop app, skills
 * link:docs/integrations.adoc[Integrations] — SmugMug and WordPress (optional)
+* link:docs/companion.adoc[The companion] — relays for the site's browser tools (HTTP, TCP, Docker, Kubernetes, git), pairing, tool windows, MCP `tool_open`
 * link:docs/templates.adoc[Templates and layouts]
 
 == Layout

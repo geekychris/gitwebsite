@@ -187,6 +187,23 @@ fn tools() -> Value {
          "inputSchema": s(json!({"slug": str_("Story slug")}), &["slug"])},
         {"name": "story_request_changes", "description": "Record the author's feedback on the proposal (what to change); revise and story_draft again.",
          "inputSchema": s(json!({"slug": str_("Story slug"), "text": str_("The author's feedback")}), &["slug", "text"])},
+        {"name": "tools_list", "description": "The site's browser tools (diagrams, graphs, simulators, calculators, viewers…): slug, title, category, summary, tags, URL parameter names, ?example= presets, tabs. Filter by category or words. Use it to pick a tool for showing something to the user, then tool_info for exact parameters.",
+         "inputSchema": s(json!({"category": str_("Category id, e.g. math, distributed, containers, electronics"), "q": str_("Words that must all match the slug, title, summary or tags")}), &[])},
+        {"name": "tool_info", "description": "One tool: every URL parameter with its meaning and an example, the ?example= presets and what each shows, the tabs (#hash), example links from its page, and the page's help text. Read this before tool_open — never guess parameter names.",
+         "inputSchema": s(json!({"slug": str_("Tool slug from tools_list")}), &["slug"])},
+        {"name": "tool_open", "description": "Show the user something in one of the site's tools: opens /tools/<slug>/?<params>#<hash> from the app's local preview in its own window (bare, no site chrome). Prefer a preset (example) when one fits; params override it. Keep the user's private data out of params unless they asked. Returns the window id and URL; if the app isn't running, returns the public link to give the user instead.",
+         "inputSchema": s(json!({"slug": str_("Tool slug"), "params": {"type": "object", "description": "URL parameters by name (strings or numbers), exactly as tool_info lists them", "additionalProperties": true},
+            "example": str_("A preset name for ?example="), "hash": str_("Tab to open (#hash), from tool_info's tabs"),
+            "title": str_("Window title (default: the tool's name)"),
+            "window": str_("reuse (default: the window already showing this tool), new, or a window id from tool_windows")}), &["slug"])},
+        {"name": "tool_windows", "description": "The tool windows open in the gitwebsite app (id, tool, title, URL).",
+         "inputSchema": s(json!({}), &[])},
+        {"name": "tool_close", "description": "Close a tool window by id.",
+         "inputSchema": s(json!({"id": str_("Window id from tool_open or tool_windows")}), &["id"])},
+        {"name": "tool_screenshot", "description": "A PNG of a tool window's page, to check what the user is seeing (the gitwebsite app on macOS only).",
+         "inputSchema": s(json!({"id": str_("Window id")}), &["id"])},
+        {"name": "companion_status", "description": "The gitwebsite app and its companion gateway: running or not, its port, the relays (HTTP upstreams, TCP allow-list, Docker socket, Kubernetes contexts, git hosts), paired tools, pending pairing requests, which supplier secrets are present (never values).",
+         "inputSchema": s(json!({}), &[])},
         {"name": "add_media", "description": "Register an image or video URL (or site path like /images/x.jpg) under a key, for use as image::media:<key>[] or video::media:<key>[].",
          "inputSchema": s(json!({"key": str_("Letters, digits, - _ ."), "url": str_("Absolute URL or site path"),
             "kind": {"type": "string", "enum": ["image", "video"]}, "alt": str_("Alt text"), "caption": str_("Caption")}), &["key", "url"])},
@@ -317,7 +334,62 @@ fn call(root: &PathBuf, name: &str, a: &Value) -> Result<Value> {
             let picks: Vec<stories::Pick> = serde_json::from_value(a.get("picks").cloned().context("missing `picks`")?).context("bad picks")?;
             stories::smugmug_pick(&site, req(a, "slug")?, &picks)
         }
+        "tools_list" => crate::toolcat::list(&site.root, sv(a, "category"), sv(a, "q")),
+        "tool_info" => crate::toolcat::info(&site.root, req(a, "slug")?),
+        "tool_open" => tool_open(&site, a),
+        "tool_windows" => crate::appclient::get("/api/view"),
+        "tool_close" => crate::appclient::send("DELETE", &format!("/api/view/{}", urlencoding::encode(req(a, "id")?)), &json!({})),
+        "tool_screenshot" => {
+            use base64::Engine;
+            let png = crate::appclient::post_bytes(&format!("/api/view/{}/screenshot", urlencoding::encode(req(a, "id")?)))?;
+            Ok(json!({ IMAGE_KEY: base64::engine::general_purpose::STANDARD.encode(png) }))
+        }
+        "companion_status" => Ok(match crate::appclient::get("/api/companion") {
+            Ok(mut v) => {
+                v["app"] = json!({ "running": true, "url": crate::appclient::base().ok() });
+                v
+            }
+            Err(e) => json!({ "app": { "running": false, "note": format!("{e:#}") }, "settings_file": crate::companion::settings::path().display().to_string() }),
+        }),
         _ => bail!("unknown tool {name}"),
+    }
+}
+
+/// A tool_screenshot result: the PNG, base64, sent as MCP image content.
+const IMAGE_KEY: &str = "_image_png_base64";
+
+fn tool_open(site: &Site, a: &Value) -> Result<Value> {
+    let slug = req(a, "slug")?;
+    let tool = crate::toolcat::load(&site.root)?.into_iter().find(|t| t.slug == slug).with_context(|| format!("no tool {slug:?}: see tools_list"))?;
+    let mut r = crate::companion::view::ViewRequest {
+        tool: slug.to_string(),
+        params: a.get("params").and_then(|p| p.as_object()).cloned().unwrap_or_default(),
+        example: sv(a, "example").map(str::to_string),
+        hash: sv(a, "hash").map(str::to_string),
+        title: sv(a, "title").map(str::to_string).or(Some(tool.title.clone())),
+        window: sv(a, "window").map(str::to_string),
+        ..Default::default()
+    };
+    if let Some(e) = &r.example {
+        if !tool.presets.is_empty() && !tool.presets.iter().any(|p| &p.name == e) {
+            bail!("{slug} has no preset {e:?}; presets: {}", tool.presets.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", "));
+        }
+    }
+    let public = crate::companion::view::tool_url(&site.config.site.base_url, &r, false);
+    let unknown: Vec<String> = r.params.keys().filter(|k| !tool.params.is_empty() && !tool.params.iter().any(|p| &p.name == *k || p.name.contains('…'))).cloned().collect();
+    r.params.retain(|_, v| !v.is_null());
+    match crate::appclient::send("POST", "/api/view", &serde_json::to_value(&r)?) {
+        Ok(mut v) => {
+            v["public_url"] = json!(public);
+            if !unknown.is_empty() {
+                v["warning"] = json!(format!("parameters not in the tool's documented list (check tool_info): {}", unknown.join(", ")));
+            }
+            Ok(v)
+        }
+        Err(e) => Ok(json!({
+            "opened": false, "public_url": public,
+            "note": format!("{e:#}. Give the user the public link instead."),
+        })),
     }
 }
 
@@ -349,7 +421,7 @@ fn handle(root: &PathBuf, msg: &Value) -> Option<Value> {
                 "protocolVersion": v,
                 "capabilities": {"tools": {}},
                 "serverInfo": {"name": "gitwebsite", "version": env!("CARGO_PKG_VERSION")},
-                "instructions": format!("Manage {}: content, areas, ideas, registry, media, project stories (photos + interview → post), enhancements of existing posts (story_enhance), build, and publish. Publishing updates the live site — always get the user's confirmation. {CONVENTIONS}", whose_site(root)),
+                "instructions": format!("Manage {}: content, areas, ideas, registry, media, project stories (photos + interview → post), enhancements of existing posts (story_enhance), build, and publish; and show the user things in the site's browser tools (tools_list → tool_info → tool_open opens a tool window in the app). Publishing updates the live site — always get the user's confirmation. {CONVENTIONS}", whose_site(root)),
             }))
         }
         "ping" => Ok(json!({})),
@@ -358,6 +430,7 @@ fn handle(root: &PathBuf, msg: &Value) -> Option<Value> {
             let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
             let args = params.get("arguments").cloned().unwrap_or(json!({}));
             match call(root, name, &args) {
+                Ok(v) if v.get(IMAGE_KEY).is_some() => Ok(json!({"content": [{"type": "image", "data": v[IMAGE_KEY], "mimeType": "image/png"}], "isError": false})),
                 Ok(v) => Ok(json!({"content": [{"type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default()}], "isError": false})),
                 Err(e) => Ok(json!({"content": [{"type": "text", "text": format!("Error: {e:#}")}], "isError": true})),
             }
@@ -396,4 +469,33 @@ pub fn run(site_root: PathBuf) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_schemas_are_well_formed() {
+        let tools = tools();
+        let list = tools.as_array().unwrap();
+        let mut names = std::collections::HashSet::new();
+        for t in list {
+            let name = t["name"].as_str().unwrap();
+            assert!(names.insert(name.to_string()), "duplicate {name}");
+            assert!(t["description"].as_str().is_some_and(|d| d.len() > 10), "{name}");
+            let s = &t["inputSchema"];
+            assert_eq!(s["type"], "object", "{name}");
+            let props = s["properties"].as_object().unwrap();
+            for r in s["required"].as_array().unwrap() {
+                assert!(props.contains_key(r.as_str().unwrap()), "{name}: required {r} not in properties");
+            }
+        }
+        for n in ["tools_list", "tool_info", "tool_open", "tool_windows", "tool_close", "tool_screenshot", "companion_status"] {
+            assert!(names.contains(n), "missing {n}");
+        }
+        let open = list.iter().find(|t| t["name"] == "tool_open").unwrap();
+        assert_eq!(open["inputSchema"]["required"], json!(["slug"]));
+        assert_eq!(open["inputSchema"]["properties"]["params"]["type"], "object");
+    }
 }

@@ -1682,7 +1682,82 @@ async function showSiteHeader() {
   }
 }
 
-const routes = { content: viewContent, stories: viewStories, ideas: viewIdeas, registry: viewRegistry, media: viewMedia, publish: viewPublish, preview: viewPreview, sites: viewSites };
+// ---------------------------------------------------------------- companion
+
+/** Companion: the local gateway the site's tools use for relays, plus the tool windows. Shows
+ *  status, pairing requests, paired origins (revocable), relay toggles and allow-lists, supplier
+ *  secrets (present or absent — values are write-only) and the audit log. */
+async function viewCompanion() {
+  const st = await get('/companion');
+  const s = st.settings || {};
+  const relays = s.relays || {};
+  const lines = a => (a || []).join('\n');
+  const yes = b => b ? '<span class="pill">yes</span>' : '<span class="pill bad">no</span>';
+  const kube = st.kube || {};
+  const audit = st.running ? await get('/companion/audit?n=100').catch(() => ({ entries: [] })) : { entries: [] };
+  main.innerHTML = `
+    <h1>Companion</h1>
+    <p class="sub">A local gateway the site's tools use for what a browser can't do alone — feeds without CORS, TCP (Postgres, Redis, Mode S), Docker, Kubernetes, git clone.
+      ${st.running ? `Running on <span class="mono">${esc(st.url)}</span>.` : '<b>Not running</b> (disabled, or another copy holds the port).'}
+      Tool windows: ${st.view === 'window' ? 'native windows' : 'the default browser'}. Settings: <span class="mono">${esc(st.settings_file || '')}</span></p>
+    ${(st.pending || []).length ? `<div class="panel"><h2>Waiting for approval</h2>${st.pending.map(p => `
+      <div class="row-item"><b>${esc(p.tool || 'a page')}</b> at <span class="mono">${esc(p.origin || '(no origin)')}</span> wants ${esc(p.scopes.join(', '))} — code <b class="mono">${esc(p.code)}</b>
+        <button class="primary" data-allow="${esc(p.id)}">Allow</button> <button class="danger" data-deny="${esc(p.id)}">Deny</button></div>`).join('')}</div>` : ''}
+    <div class="panel"><h2>Paired</h2>
+      ${(st.paired || []).length ? `<table><tr><th>Origin</th><th>Tool</th><th>Scopes</th><th>Last used</th><th></th></tr>${st.paired.map(t => `
+        <tr><td class="mono">${esc(t.origin || '(no origin)')}</td><td>${esc(t.tool)}</td><td>${esc((t.scopes || []).join(', '))}</td><td>${esc(t.last_used || '—')}</td>
+        <td><button class="danger" data-revoke="${esc(t.id)}">Revoke</button></td></tr>`).join('')}</table>` : '<p class="muted">Nothing paired yet. Pages from this app\'s preview pair automatically; others ask here and in a dialog.</p>'}
+    </div>
+    <div class="panel"><h2>Relays</h2>
+      <div class="bar">${['http', 'tcp', 'docker', 'kube', 'git'].map(r => `<label class="inline"><input type="checkbox" data-relay="${r}" ${relays[r] ? 'checked' : ''}> ${r}</label>`).join(' ')}</div>
+      <label>TCP allow-list (host:port, one per line) <textarea rows="3" data-set="tcp_allow">${esc(lines(s.tcp_allow))}</textarea></label>
+      <label>Extra page origins allowed (one per line; the site and http://127.0.0.1:* / localhost:* always are) <textarea rows="2" data-set="extra_origins">${esc(lines(s.extra_origins))}</textarea></label>
+      <label>ADS-B receiver (relay/http/receiver) <input data-set="receiver" value="${esc(s.receiver)}" placeholder="http://piaware.local:8080"></label>
+      <label>Kafka REST proxy (relay/http/kafka-rest) <input data-set="kafka_rest" value="${esc(s.kafka_rest)}" placeholder="http://localhost:8082"></label>
+      <label>Redpanda HTTP Proxy (relay/http/redpanda-proxy) <input data-set="redpanda_proxy" value="${esc(s.redpanda_proxy)}" placeholder="http://localhost:8082"></label>
+      <label>Redpanda Admin API (relay/http/redpanda-admin, GET only) <input data-set="redpanda_admin" value="${esc(s.redpanda_admin)}" placeholder="http://localhost:9644"></label>
+      <label>Extra git hosts (one per line) <textarea rows="2" data-set="git_hosts">${esc(lines(s.git_hosts))}</textarea></label>
+      <label class="inline"><input type="checkbox" data-flag="git_allow_push" ${s.git_allow_push ? 'checked' : ''}> Allow git push through the relay</label>
+      <label>Docker socket (empty: auto-detect) <input data-set="docker_host" value="${esc(s.docker_host)}" placeholder="unix:///Users/you/.rd/docker.sock"></label>
+      <label>kubeconfig (empty: $KUBECONFIG or ~/.kube/config; read, never written) <input data-set="kubeconfig" value="${esc(s.kubeconfig)}"></label>
+      <button class="primary" data-save>Save settings</button>
+      <p class="small muted">Docker: ${st.docker ? `<span class="mono">${esc(st.docker)}</span>` : 'no socket found'}.
+        Kubernetes: ${kube.ok ? `${(kube.contexts || []).length} context(s) — ${(kube.contexts || []).map(c => esc(c.name)).join(', ')}` : esc(kube.error || 'none')}.
+        HTTP upstreams: ${esc((st.upstreams || []).join(', '))}.</p>
+    </div>
+    <div class="panel"><h2>Supplier API secrets</h2>
+      <p class="small muted">Kept in the macOS Keychain and added to parts-supplier requests by the companion; pages never see them. Values are never shown.</p>
+      <table><tr><th>Secret</th><th>Present</th><th></th></tr>${Object.entries(st.secrets || {}).map(([k, v]) => `
+        <tr><td class="mono">${esc(k)}</td><td>${yes(v)}</td><td><button data-secret="${esc(k)}">Set…</button> ${v ? `<button class="danger" data-unsecret="${esc(k)}">Remove</button>` : ''}</td></tr>`).join('')}</table>
+    </div>
+    <div class="panel"><h2>Audit log</h2>
+      ${audit.entries.length ? `<table><tr><th>When</th><th>Origin</th><th>Tool</th><th>Request</th><th>Status</th></tr>${audit.entries.map(e => `
+        <tr><td class="small">${esc(e.at)}</td><td class="mono small">${esc(e.origin || '—')}</td><td>${esc(e.tool || '')}</td><td class="mono small">${esc(e.method)} ${esc(e.path)}</td><td>${esc(e.status)}</td></tr>`).join('')}</table>` : '<p class="muted">No requests yet.</p>'}
+    </div>`;
+  const refresh = () => viewCompanion();
+  $$('[data-allow]').forEach(b => b.onclick = () => guard(async () => { await api('POST', '/companion/pair/' + b.dataset.allow, { allow: true }); toast('Allowed'); refresh(); }));
+  $$('[data-deny]').forEach(b => b.onclick = () => guard(async () => { await api('POST', '/companion/pair/' + b.dataset.deny, { allow: false }); toast('Denied'); refresh(); }));
+  $$('[data-revoke]').forEach(b => b.onclick = () => guard(async () => { await api('DELETE', '/companion/tokens/' + encodeURIComponent(b.dataset.revoke)); toast('Revoked'); refresh(); }));
+  $$('[data-unsecret]').forEach(b => b.onclick = () => guard(async () => { await api('DELETE', '/companion/secrets/' + b.dataset.unsecret); toast('Removed'); refresh(); }));
+  $$('[data-secret]').forEach(b => b.onclick = async () => {
+    const v = await form('Set ' + b.dataset.secret, [{ name: 'value', label: 'Value (stored in the Keychain; not shown again)', required: true }], 'Save');
+    if (v) guard(async () => { await api('PUT', '/companion/secrets/' + b.dataset.secret, { value: v.value }); toast('Saved'); refresh(); });
+  });
+  $('[data-save]').onclick = () => guard(async () => {
+    const patch = { relays: {} };
+    $$('[data-relay]').forEach(c => (patch.relays[c.dataset.relay] = c.checked));
+    $$('[data-flag]').forEach(c => (patch[c.dataset.flag] = c.checked));
+    $$('[data-set]').forEach(el => {
+      const k = el.dataset.set;
+      patch[k] = el.tagName === 'TEXTAREA' ? el.value.split('\n').map(x => x.trim()).filter(Boolean) : el.value.trim();
+    });
+    const r = await api('PUT', '/companion/settings', patch);
+    toast(r.restart_needed ? 'Saved — restart the app for the port change' : 'Saved');
+    refresh();
+  });
+}
+
+const routes = { companion: viewCompanion, content: viewContent, stories: viewStories, ideas: viewIdeas, registry: viewRegistry, media: viewMedia, publish: viewPublish, preview: viewPreview, sites: viewSites };
 
 async function route() {
   const h = location.hash.replace(/^#/, '') || 'content';

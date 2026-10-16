@@ -22,12 +22,12 @@ serde_yaml.workspace = true
 chrono.workspace = true
 clap.workspace = true
 tokio.workspace = true
-axum.workspace = true
+axum = { workspace = true, features = ["ws"] }
 # server
 tower-http = { version = "0.6", features = ["fs", "cors", "trace"] }
 open = "5"
 # integrations
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "multipart", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "multipart", "rustls-tls", "stream"] }
 hmac = "0.12"
 sha1 = "0.10"
 base64 = "0.22"
@@ -37,6 +37,16 @@ quick-xml = { version = "0.37", features = ["serialize"] }
 regex = "1"
 walkdir = "2"
 futures-util = "0.3"
+# companion gateway: relays (Docker over a unix socket), token hashes, Keychain secrets
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1"
+sha2 = "0.10"
+toml.workspace = true
+hex = "0.4"
+keyring = { version = "3", features = ["apple-native", "windows-native"] }
 
 [dev-dependencies]
+tokio-tungstenite = "0.28"
 image = { version = "0.25", default-features = false, features = ["jpeg"] }

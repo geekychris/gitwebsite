@@ -1,0 +1,302 @@
+= The companion: relays and tool windows
+:toc:
+
+Many of the site's browser tools need something a web page cannot do on its own. Examples are reading an
+API that sends no CORS headers, opening a TCP connection (Postgres, Redis, a Mode S feed), reading the
+Docker socket or a Kubernetes API, or cloning over git smart-HTTP. Each of these used to need its own
+relay script (`aviation-relay.py`, `container-relay.py`, `postgres-relay.py`, `git-relay.py`,
+`parts-relay.py`, the Kafka CORS relay, a Redis WebSocket bridge). The *companion* replaces all of
+them. It is a small gateway built into the gitwebsite app and `gw serve`.
+
+The same app also opens the site's tools in their own windows (the *tool viewer*). Claude uses the
+viewer through MCP to show you things: diagrams, plots, simulations.
+
+== Where it runs
+
+* The desktop app and `gw serve` start it on `127.0.0.1:7317`. If that port is taken they fall back
+  to 7318–7320. Set a different port with `GW_COMPANION_PORT`, `gw serve --companion-port`, or `port`
+  in the settings. It uses its own port, separate from the app's UI port (8790 or a free one).
+* `gw serve --no-companion` turns it off for that run. `enabled = false` in the settings turns it off
+  for good.
+* `<config dir>/server.json` records where the running app listens (`ui_port`, `companion_port`,
+  `pid`). `gw mcp` and `gw companion …` read it to find the app.
+
+== Protocol v1
+
+`GET /v1/hello` returns:
+
+[source,json]
+----
+{"name":"gitwebsite-companion","version":"1",
+ "capabilities":["relay.http","relay.tcp","relay.docker","relay.kube","relay.git","view"],
+ "paired":false,"scopes":[],"app":false}
+----
+
+`app` is true for pages served by the app's own preview. A page should call `/v1/hello` first,
+before it shows any "run the relay script" instructions.
+
+=== Security on every request
+
+* *Host* must be `127.0.0.1`, `localhost` or `[::1]`, with an optional port. Anything else gets a 403,
+  which defeats DNS rebinding.
+* *Origin* must be on the allow-list: `https://geekychris.github.io`, `http://127.0.0.1:<port>`,
+  `http://localhost:<port>`, `http://[::1]:<port>`, plus any origins you add (`extra_origins`).
+  Origins are matched exactly, never by prefix. A request with no Origin is a non-browser client such
+  as curl or the CLI. It is allowed, but it still needs a token.
+* *CORS*: allowed origins are reflected in `Access-Control-Allow-Origin` (with `Vary: Origin`).
+  Preflights (`OPTIONS`) are answered with `Access-Control-Allow-Private-Network: true`, so Chrome's
+  Private Network Access lets an https page call localhost.
+* *Tokens*: every endpoint except `/v1/hello` and pairing needs a pairing token with the scope of the
+  relay being used. A page can send it three ways:
+** `Authorization: Bearer <token>`. In this case the page's Authorization header is _not_ forwarded
+   upstream.
+** `X-Companion-Token: <token>`. In this case the page's own `Authorization` header _is_ forwarded to
+   the upstream: a token for a private git repo, Kafka REST credentials, or a supplier token.
+** For WebSockets, the `Sec-WebSocket-Protocol` header: offer `gw-companion.v1, bearer.<token>`. The
+   server picks `gw-companion.v1`. If only `bearer.<token>` is offered, it is echoed back.
++
+Tokens in the query string are never accepted.
+* Each token is bound to the origin it was issued to. Only its SHA-256 hash is stored, in
+  `<config dir>/companion-tokens.json` (mode 0600).
+* Every request except `/v1/hello` is written to the audit log (`<config dir>/companion-audit.log`,
+  JSON lines, rotated at 2 MB). Each entry records the time, origin, tool, method, path (without the
+  query) and status.
+
+=== Pairing
+
+`POST /v1/pair` with the body `{"tool":"<slug>","scopes":["relay.tcp", …]}` starts pairing. The
+scopes are `relay.http`, `relay.tcp`, `relay.docker`, `relay.kube`, `relay.git` and `view`. If no
+scopes are given, the request covers all the relays but not `view`.
+
+* Pages from the app's own preview (`http://127.0.0.1:<ui port>`) are paired at once and get
+  `200 {"token": …, "scopes": […]}`. So does any page when the companion was started with
+  `--companion-auto-approve` (for headless use only).
+* Any other page gets `202 {"id", "code", "poll": "/v1/pair/<id>", "expires_in": 300}`. The page
+  shows the 6-digit `code`. The app shows a dialog (Allow/Deny) with the origin, the tool, the scopes
+  and the same code. The request is also listed on the app's Companion page, and in
+  `gw companion pending`. You can approve it with `gw companion approve <code>`, or refuse it with
+  `gw companion deny <code>`.
+* `GET /v1/pair/<id>`, sent from the same origin, long-polls for up to 50 s. It returns
+  `200 {"token", "scopes"}`, `403` if the request was denied, `202 {"pending":true}` (poll again), or
+  `404` if the request has expired or the poll comes from a different origin.
+* Pairing again from the same origin and tool replaces the old token. To revoke a token, use the
+  Companion page, `gw companion revoke <id or origin>`, or `DELETE /api/companion/tokens/<id>`.
+
+`GET /v1/status` (with any valid token) describes the relays: upstream ids, which user upstreams are
+configured, which supplier secrets are present, the TCP allow-list, the Docker socket, the Kubernetes
+contexts and the git hosts. It never shows a secret or a token.
+
+== Relays
+
+=== HTTP: `/v1/relay/http/<upstream>/<path>`
+
+The relay only reaches a fixed set of upstreams, so it is never an open proxy. The path must use
+URL-safe characters only. It may not contain `..`, `.` segments, `//`, `@`, a backslash or a scheme,
+and the resulting host must be the upstream's own. Cookies and the page's Origin are never forwarded.
+
+[cols="1,2,1"]
+|===
+| Upstream | Goes to | Methods
+
+| `adsblol`, `adsbfi`, `opensky`, `awc` | api.adsb.lol, opendata.adsb.fi, opensky-network.org, aviationweather.gov | GET (cached for 2 s)
+| `receiver` | your ADS-B receiver (setting `receiver`, e.g. `http://piaware.local:8080`) | GET (cached for 2 s)
+| `digikey`, `mouser`, `nexar`, `nexar-id` | the parts suppliers' APIs | GET, POST (bodies up to 64 KB, header allow-list)
+| `kafka-rest`, `redpanda-proxy` | your Kafka REST proxy or Redpanda HTTP Proxy (settings) | GET, POST, PUT, DELETE; POST with `X-Method-Override: GET` becomes a GET with a body
+| `redpanda-admin` | the Redpanda Admin API (setting) | GET (and POST with override to GET)
+|===
+
+The relay keeps the rate-limit headers (`X-Rate-Limit-Remaining`, `X-RateLimit-*`, `Retry-After`).
+It adds `X-Relay-Upstream` and `X-Relay-Cache` to each response.
+
+*Supplier secrets.* The relay can sign supplier requests with stored secrets, the same way
+`parts-relay.py` did:
+
+* `digikey_client_id` and `digikey_client_secret`: the relay gets a Digi-Key OAuth token and sends it
+  with `X-DIGIKEY-Client-Id`.
+* `mouser_api_key`: added as `apiKey=`.
+* `nexar_client_id` and `nexar_client_secret`: the relay gets a Nexar token.
+
+The secrets live in the macOS Keychain (service `gitwebsite-companion`). The environment variables
+`DIGIKEY_CLIENT_ID` and so on take precedence. Set them in the app's Companion page or with
+`gw companion secret set digikey`. You can see whether each secret is present, but no API ever
+returns its value.
+
+=== TCP over WebSocket: `/v1/relay/tcp?target=host:port[&mode=text]`
+
+The relay copies bytes, unchanged, between the WebSocket and a new TCP connection. Frames are binary
+in both directions. With `mode=text`, the server sends text frames instead, for the Mode S AVR raw
+feed. The target must be on `tcp_allow`, which by default is `127.0.0.1:5432` and `127.0.0.1:6379`;
+add entries such as a Pi's `:30005` Beast or `:30002` raw port. `localhost`, `127.0.0.1` and `::1`
+count as the same host. Every WebSocket gets its own TCP connection, so each Postgres session is its
+own backend. This relay is used by the Postgres playground, the Redis client and the Mode S feeds.
+
+=== Docker: `/v1/relay/docker/<api path>`
+
+This relay reads the Docker Engine API over the local socket. It uses `docker_host` if set, then
+`$DOCKER_HOST` (`unix://`), then the first socket it finds: `/var/run/docker.sock`,
+`~/.rd/docker.sock` (Rancher Desktop), `~/.docker/run/docker.sock`, Colima, then OrbStack. The
+behaviour is the same as `container-relay.py`:
+
+* GET only. Any other method gets 405.
+* Only an allow-list of read endpoints is forwarded: `_ping`, `version`, `info`, `system/df`,
+  `events`, the container and image lists, a container's `json`, `logs`, `stats`, `top` and
+  `changes`, image `json` and `history`, volumes and networks.
+* `exec`, `attach`, `archive`, `export` and `images/get` are refused, and so are upgrade requests.
+* Streaming reads (`follow=1`, `stats`, `events`) pass through with no timeout.
+* `GET /v1/relay/docker` reports the socket and a ping.
+
+=== Kubernetes: `/v1/relay/kube/<context>/<api path>`
+
+This relay reaches a Kubernetes API through your kubeconfig (`kubeconfig`, else `$KUBECONFIG`, else
+`~/.kube/config`) and a named context. Percent-encode context names that contain `/`. The kubeconfig
+is read but never written, and its current context is never changed. Credentials stay in the
+companion:
+
+* client certificates
+* bearer tokens and `tokenFile`
+* basic auth
+* `exec` plugins such as `aws eks get-token` or `gke-gcloud-auth-plugin`; their tokens are cached
+  until shortly before they expire.
+
+`tls-server-name` and `insecure-skip-tls-verify` are honoured. `auth-provider` is not supported; use
+`kubectl proxy` instead.
+
+The relay is GET only. Watches and log follow stream through. Secrets are refused, as are `exec`,
+`attach`, `portforward` and the `proxy` subresources. `GET /v1/relay/kube` lists the contexts with
+their server and auth kind, but no credentials.
+
+=== Git: `/v1/relay/git/<host>/<repo>/(info/refs|git-upload-pack|git-receive-pack)`
+
+This is a CORS proxy for isomorphic-git. Set `corsProxy` to `http://127.0.0.1:7317/v1/relay/git`,
+and send the token in an `X-Companion-Token` header through isomorphic-git's `headers` option. The
+relay works like `git-relay.py`:
+
+* Only these requests are relayed: `GET info/refs?service=git-upload-pack` and
+  `POST git-upload-pack`.
+* Hosts must be on the allow-list: github.com, gitlab.com, codeberg.org, bitbucket.org, plus
+  `git_hosts`. The upstream is always https.
+* Push (`git-receive-pack`) is refused unless `git_allow_push = true`.
+
+== Tool viewer
+
+The app's REST API opens tools in windows:
+
+[cols="1,3"]
+|===
+| Request | Does
+
+| `POST /api/view` | Body: `{"tool":"<slug>", "params":{…}, "example":"…", "hash":"tab", "state":{…}, "title":"…", "window":"reuse\|new\|<id>", "chrome":false}`. Opens `http://127.0.0.1:<ui port>/tools/<slug>/?<params>&example=…&bare=1#<hash>` in a native window titled with the tool's name (or `title`). `reuse`, the default, navigates the window already showing that tool. `state` is packed into the site kit's `?s=` as `j` + base64url JSON. Returns `{opened, window:{id,tool,title,url}, url}`.
+| `GET /api/view` | The open tool windows.
+| `DELETE /api/view/<id>` | Closes a window.
+| `POST /api/view/<id>/screenshot` | A PNG of the page, taken with WKWebView's snapshot (macOS). Returns 501 elsewhere.
+|===
+
+Links that leave the preview open in the default browser. Closing a tool window really closes it;
+only the main window hides to the menu bar. A page with a `view` token can ask for a window too, with
+`POST /v1/view` (same body).
+
+Under `gw serve` there is no app to make windows, so `POST /api/view` opens the URL in the default
+browser, and listing, closing and screenshots are unavailable.
+
+For a tool to fill the window, its page must honour `?bare=1`: no site header, footer or help chrome.
+That is the site kit's job.
+
+== Tool catalogue
+
+`GET /api/tools[?category=&q=]` and `GET /api/tools/<slug>` read the site's tool pages
+(`content/tools/*.adoc`, `:type: tool`). For each tool they return:
+
+* the slug, title, summary, category and tags
+* the URL parameters from the "Linking to an example" table: name, meaning and an example; when a
+  page has no table, the parameters mentioned in its Sharing text and example links
+* the `?example=` presets, from a table or a list
+* the tabs ("Add a tab after `#`: …")
+* example links, and (in `info`) the page's help text
+
+`gw tools list|info|open|index` does the same from the command line. `gw tools index` writes
+`skills/show-with-tools/tools-index.md`, the "which tool for which rendering" table used by the
+skill. `scripts/gen-tools-skill-index` regenerates it, and so does `scripts/install-skills.sh`.
+
+== MCP tools
+
+`gw mcp` finds the running app through `server.json` (or `GW_APP_PORT`, else 8790) and adds these
+tools:
+
+[cols="1,3"]
+|===
+| Tool | Does
+
+| `tools_list` | The catalogue: slug, title, category, summary, tags, parameter names, presets and tabs (filter with `category` and `q`).
+| `tool_info` | One tool: its parameters with meanings, the presets and what each shows, its tabs, links and help text.
+| `tool_open` | `{slug, params, example, hash, title, window}` → opens the window and returns `window`, `url` and `public_url`. It checks the preset name. If the app isn't running, it returns `public_url` to give the user instead.
+| `tool_windows`, `tool_close` | List and close tool windows.
+| `tool_screenshot` | The window as an MCP image (PNG).
+| `companion_status` | App and gateway status, the relays, paired tools, pending requests, and which secrets are present.
+|===
+
+The `show-with-tools` skill teaches Claude when to use these tools, and how.
+
+== Settings
+
+The settings live in `<config dir>/companion.toml`, beside `config.toml` (see `gw config show`). You
+can edit them on the app's *Companion* page or with `gw companion set <key> <value>` (values may be
+JSON; `relays.git false` sets one relay), or by hand.
+
+[source,toml]
+----
+enabled = true
+port = 7317
+extra_origins = []                       # more page origins
+tcp_allow = ["127.0.0.1:5432", "127.0.0.1:6379"]
+receiver = ""                            # ADS-B receiver web base
+kafka_rest = ""
+redpanda_proxy = ""
+redpanda_admin = ""
+git_hosts = []
+git_allow_push = false
+docker_host = ""                         # empty: auto-detect
+kubeconfig = ""                          # empty: $KUBECONFIG or ~/.kube/config
+auto_approve = false
+[relays]
+http = true
+tcp = true
+docker = true
+kube = true
+git = true
+----
+
+The Companion page shows:
+
+* the gateway's status and URL
+* pending pairing requests (Allow/Deny)
+* paired origins and tools (Revoke)
+* relay toggles, allow-lists and upstream URLs
+* the Docker socket and Kubernetes contexts it found
+* supplier secrets, shown as present or absent (Set or Remove; values are never shown)
+* the audit log
+
+Changes to companion state through `/api/companion/*` and `/api/view` are refused from any page whose
+Origin differs from the app's own. A changed port takes effect after a restart.
+
+== Command line
+
+----
+gw serve [--no-companion] [--companion-port N] [--companion-auto-approve]
+gw companion status | pending | approve <code> | deny <code> | tokens | revoke <id|origin> | audit [--n N]
+gw companion set <key> <value>
+gw companion secret list | set <digikey|mouser|nexar|field> [--value V] | delete <name>
+gw tools list [--category C] [-q words] | info <slug> | index [--out FILE] | open <slug> [-p k=v]… [--example E] [--hash H] [--new]
+----
+
+== Limits
+
+* The gateway binds 127.0.0.1 only. There is no option to expose it to a network.
+* There is no TLS. Traffic between a page and the companion is plain HTTP or WebSocket on localhost,
+  so the Postgres and Redis protocols are unencrypted there, as they were with the scripts.
+* Screenshots work only in the macOS app. On other platforms they return 501.
+* The Kubernetes relay does not support `auth-provider` contexts or client certificates returned by
+  exec plugins.
+* The kubeconfig's YAML is read with serde_yaml, and multiple `$KUBECONFIG` files are merged with the
+  first file winning.
+* Linux builds have no persistent secret store (the keychain feature is macOS and Windows only). Use
+  the environment variables instead.

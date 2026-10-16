@@ -7,7 +7,7 @@
 //!
 //! Binds 127.0.0.1 only. A fresh [`Site`] is opened per request so edits on disk are seen.
 
-use crate::{enhance, ops, stories};
+use crate::{enhance, ops, server_companion as sc, stories};
 use anyhow::Result;
 use axum::{
     body::Body,
@@ -971,6 +971,17 @@ fn router_for(st: AppState) -> Router {
         .route("/api/smugmug/albums", get(smugmug_albums))
         .route("/api/photos/albums", get(photos_albums))
         .route("/api/smugmug/browse", get(smugmug_browse))
+        .route("/api/tools", get(|State(st): State<AppState>, q: Query<sc::ToolsQuery>| async move { sc::tools_list(st.root().ok(), sc::tools_query(q)).await }))
+        .route("/api/tools/{slug}", get(|State(st): State<AppState>, AxPath(slug): AxPath<String>| async move { sc::tool_info(st.root().ok(), slug).await }))
+        .route("/api/view", get(sc::view_list).post(|State(st): State<AppState>, h: HeaderMap, Json(r): Json<crate::companion::view::ViewRequest>| async move { sc::view_open(st.root().ok(), h, r).await }))
+        .route("/api/view/{id}", axum::routing::delete(sc::view_close))
+        .route("/api/view/{id}/screenshot", post(sc::view_screenshot))
+        .route("/api/companion", get(sc::status))
+        .route("/api/companion/settings", axum::routing::put(sc::settings_put))
+        .route("/api/companion/audit", get(sc::audit))
+        .route("/api/companion/pair/{which}", post(sc::pair_decide))
+        .route("/api/companion/tokens/{id}", axum::routing::delete(sc::token_revoke))
+        .route("/api/companion/secrets/{name}", axum::routing::put(sc::secret_put).delete(sc::secret_delete))
         .route("/app", get(|| async { Redirect::permanent("/app/") }))
         .route("/app/", get(ui))
         .route("/app/{*path}", get(ui))
@@ -1052,17 +1063,48 @@ fn watch_preview(st: AppState) {
 
 /// Serve the REST API at /api, the management UI at /app, and the built site at /preview.
 pub async fn run(site_root: Option<PathBuf>, port: u16, open: bool) -> Result<()> {
+    run_with(site_root, port, open, Some(crate::companion::StartOptions::default())).await
+}
+
+/// [`run`] with companion options (`gw serve --no-companion`, `--companion-port`, `--companion-auto-approve`).
+pub async fn run_with(site_root: Option<PathBuf>, port: u16, open: bool, companion: Option<crate::companion::StartOptions>) -> Result<()> {
     let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], port))).await?;
-    serve_on(site_root, listener, open).await
+    serve_with(site_root, listener, open, companion).await
 }
 
 /// Like [`run`], on an already-bound listener (the desktop app picks a free port itself).
+/// Starts the companion gateway too.
 pub async fn serve_on(site_root: Option<PathBuf>, listener: tokio::net::TcpListener, open: bool) -> Result<()> {
+    serve_with(site_root, listener, open, Some(crate::companion::StartOptions::default())).await
+}
+
+/// [`serve_on`] with companion options (`None`: no companion).
+pub async fn serve_with(
+    site_root: Option<PathBuf>,
+    listener: tokio::net::TcpListener,
+    open: bool,
+    companion: Option<crate::companion::StartOptions>,
+) -> Result<()> {
     stories::set_actor("app");
     if let Some(root) = site_root.clone() {
         tokio::task::spawn_blocking(move || initial_preview(&root)).await?;
     }
     let addr = listener.local_addr()?;
+    sc::UI_PORT.store(addr.port(), std::sync::atomic::Ordering::Relaxed);
+    let companion_port = match companion {
+        Some(mut o) => {
+            o.ui_port = Some(addr.port());
+            match crate::companion::start(o).await {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("companion: not started: {e:#}");
+                    None
+                }
+            }
+        }
+        None => None,
+    };
+    sc::write_server_file(addr.port(), companion_port);
     let url = format!("http://{addr}/app/");
     eprintln!("gitwebsite: {url}  (API at http://{addr}/api, preview at http://{addr}/preview/)");
     if site_root.is_none() {
