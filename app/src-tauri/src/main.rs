@@ -80,16 +80,26 @@ fn start_dictation() {
 fn ask_pairing(app: &AppHandle, req: gw::companion::pairing::PairRequest) {
     use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
     let who = if req.origin.is_empty() { "a program on this Mac (no web origin)".to_string() } else { req.origin.clone() };
-    let tool = if req.tool.is_empty() { "a page".to_string() } else { format!("the {} tool", req.tool) };
+    let tool = if req.tool.is_empty() { "(not named)".to_string() } else { req.tool.clone() };
+    let what = |s: &str| match s {
+        "relay.http" => "reach web APIs (aviation, parts suppliers, your receiver / Kafka REST)",
+        "relay.tcp" => "open TCP connections to hosts on your allow-list",
+        "relay.docker" => "read Docker (containers, images — read only)",
+        "relay.kube" => "read your Kubernetes clusters (read only)",
+        "relay.git" => "clone and fetch git repositories",
+        "view" => "open tool windows in the app",
+        _ => "",
+    };
+    let scopes: Vec<String> = req.scopes.iter().map(|s| format!("  • {s} — {}", what(s))).collect();
     let msg = format!(
-        "{tool} at {who} asks to use the gitwebsite companion:\n\n{}\n\nCode {} — check that the page shows the same code.\n\nAllow only pages you trust; you can revoke it later in Companion settings.",
-        req.scopes.join(", "),
+        "Tool:   {tool}\nPage:   {who}\n\nwants to use the gitwebsite companion to:\n{}\n\nCode {} — check that the page shows the same code.\n\nAllow only pages you trust; you can revoke it later in Companion settings.",
+        scopes.join("\n"),
         req.code
     );
     let id = req.id.clone();
     app.dialog()
         .message(msg)
-        .title("Allow companion access?")
+        .title(&format!("Allow {} to use the companion?", if req.tool.is_empty() { "this page" } else { req.tool.as_str() }))
         .kind(MessageDialogKind::Warning)
         .buttons(MessageDialogButtons::OkCancelCustom("Allow".into(), "Deny".into()))
         .show(move |allow| {

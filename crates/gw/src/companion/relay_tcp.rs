@@ -2,9 +2,11 @@
 //! and one new TCP connection to a target on the user's allow-list (as postgres-relay.py, the
 //! Redis bridge, and aviation-relay.py's Beast/raw feeds). Binary frames both ways; with
 //! `&mode=text` the server sends text frames (Mode S AVR). The token comes in the
-//! `Sec-WebSocket-Protocol` header as `bearer.<token>` — never in the URL.
+//! `Sec-WebSocket-Protocol` header as `bearer.<token>` — never in the URL. A client that also
+//! offers `gw-companion.codes` gets refusals as close codes after the upgrade (4400, 4401,
+//! 4403, 4502) instead of an HTTP error a browser cannot see.
 
-use super::{authorize, err, settings::parse_target, tagged, Gateway, Origin};
+use super::{check_token, err, pairing::TokenRecord, settings::parse_target, tagged, wants_close_codes, ws_close_code, ws_refuse, Gateway, Origin};
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -53,27 +55,38 @@ pub async fn handle(
     Query(q): Query<TcpQuery>,
     ws: Result<WebSocketUpgrade, axum::extract::ws::rejection::WebSocketUpgradeRejection>,
 ) -> Response {
+    let Ok(ws) = ws else {
+        return err(StatusCode::BAD_REQUEST, "this endpoint is a WebSocket");
+    };
+    let codes = wants_close_codes(&h);
+    // A refusal: an HTTP error before the upgrade, or (when the client offered
+    // `gw-companion.codes`) the upgrade and then a close with an application code.
+    let refuse = |ws: WebSocketUpgrade, status: StatusCode, msg: String, rec: Option<&TokenRecord>| {
+        let r = if codes { ws_refuse(ws, ws_close_code(status), &msg) } else { err(status, msg) };
+        match rec {
+            Some(rec) => tagged(r, rec),
+            None => r,
+        }
+    };
     let s = gw.settings();
     if !s.relays.tcp {
-        return err(StatusCode::SERVICE_UNAVAILABLE, "the TCP relay is turned off in the companion settings");
+        return refuse(ws, StatusCode::SERVICE_UNAVAILABLE, "the TCP relay is turned off in the companion settings".into(), None);
     }
-    let (rec, presented) = match authorize(&gw, &h, &origin, "relay.tcp") {
+    let (rec, presented) = match check_token(&gw, &h, &origin, "relay.tcp") {
         Ok(x) => x,
-        Err(r) => return r,
+        Err((status, msg)) => return refuse(ws, status, msg, None),
     };
-    let Ok(ws) = ws else {
-        return tagged(err(StatusCode::BAD_REQUEST, "this endpoint is a WebSocket"), &rec);
-    };
+    if q.target.trim().is_empty() {
+        return refuse(ws, StatusCode::BAD_REQUEST, "missing ?target=host:port".into(), Some(&rec));
+    }
     let Some((host, port)) = allowed(&q.target, &s.tcp_allow) else {
-        return tagged(
-            err(StatusCode::FORBIDDEN, format!("target {:?} is not on the TCP allow-list (add it in the app's Companion settings)", q.target)),
-            &rec,
-        );
+        let msg = format!("target {:?} is not on the TCP allow-list (add it in the app's Companion settings)", q.target);
+        return refuse(ws, StatusCode::FORBIDDEN, msg, Some(&rec));
     };
     let up = match tokio::time::timeout(Duration::from_secs(10), TcpStream::connect((host.as_str(), port))).await {
         Ok(Ok(s)) => s,
-        Ok(Err(e)) => return tagged(err(StatusCode::BAD_GATEWAY, format!("cannot connect to {host}:{port}: {e}")), &rec),
-        Err(_) => return tagged(err(StatusCode::GATEWAY_TIMEOUT, format!("timed out connecting to {host}:{port}")), &rec),
+        Ok(Err(e)) => return refuse(ws, StatusCode::BAD_GATEWAY, format!("cannot connect to {host}:{port}: {e}"), Some(&rec)),
+        Err(_) => return refuse(ws, StatusCode::GATEWAY_TIMEOUT, format!("timed out connecting to {host}:{port}"), Some(&rec)),
     };
     let _ = up.set_nodelay(true);
     let text = q.mode == "text";

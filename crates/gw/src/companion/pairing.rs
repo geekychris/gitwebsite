@@ -133,6 +133,16 @@ impl Tokens {
             .collect()
     }
 
+    /// Revoke a presented token (the page's own "Forget"); returns its record.
+    pub fn revoke_token(&self, token: &str, origin: &str) -> Option<TokenRecord> {
+        let h = hash(token);
+        let mut l = self.list.lock().unwrap();
+        let i = l.iter().position(|r| r.hash == h && r.origin == origin)?;
+        let rec = l.remove(i);
+        self.save(&l);
+        Some(rec)
+    }
+
     /// Revoke by id, or every token of an origin.
     pub fn revoke(&self, which: &str) -> usize {
         let mut l = self.list.lock().unwrap();

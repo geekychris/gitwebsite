@@ -19,6 +19,7 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 pub const DEFAULT_PORT: u16 = 7317;
@@ -75,6 +76,12 @@ pub struct Settings {
     /// Approve every pairing request without asking (headless `gw serve --companion-auto-approve`).
     pub auto_approve: bool,
     pub relays: Relays,
+    /// Testing only: replace a fixed upstream's base URL, e.g. `digikey = "http://127.0.0.1:9999"`,
+    /// so supplier relays can be tested end to end against a mock. Honoured only for a
+    /// non-default config directory (`GW_CONFIG_DIR`) or with `GW_COMPANION_TEST_UPSTREAMS=1`;
+    /// ignored (with a warning) for the user's real config.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub upstream_override: BTreeMap<String, String>,
 }
 
 impl Default for Settings {
@@ -95,6 +102,7 @@ impl Default for Settings {
             kubeconfig: String::new(),
             auto_approve: false,
             relays: Relays::default(),
+            upstream_override: BTreeMap::new(),
         }
     }
 }
@@ -161,12 +169,31 @@ impl Settings {
             }
         }
         for (name, u) in [("receiver", &self.receiver), ("kafka_rest", &self.kafka_rest), ("redpanda_proxy", &self.redpanda_proxy), ("redpanda_admin", &self.redpanda_admin)] {
-            if !u.is_empty() && !(u.starts_with("http://") || u.starts_with("https://")) {
-                anyhow::bail!("{name} must be an http(s) URL");
+            if !u.is_empty() {
+                check_base(u).with_context(|| format!("{name} {u:?}"))?;
             }
+        }
+        for (id, u) in &self.upstream_override {
+            check_base(u).with_context(|| format!("upstream_override.{id} {u:?}"))?;
         }
         Ok(())
     }
+}
+
+/// A relay base URL: `http(s)://host[:port]`, optionally with a path prefix (kept, but the
+/// request path is not doubled — see relay_http), no query, fragment or credentials.
+pub fn check_base(u: &str) -> Result<()> {
+    if !(u.starts_with("http://") || u.starts_with("https://")) {
+        anyhow::bail!("must be an http(s) URL like http://piaware.local:8080");
+    }
+    let url = reqwest::Url::parse(u).context("not a URL")?;
+    if url.host_str().is_none_or(|h| h.is_empty()) {
+        anyhow::bail!("has no host");
+    }
+    if url.query().is_some() || url.fragment().is_some() || !url.username().is_empty() || url.password().is_some() {
+        anyhow::bail!("must be scheme://host[:port] only (no query, fragment or user:password@)");
+    }
+    Ok(())
 }
 
 /// `host:port` → (lower-cased host, port). IPv6 as `[::1]:5432`.
@@ -196,5 +223,14 @@ mod tests {
         let round: Settings = toml::from_str(&toml::to_string_pretty(&m).unwrap()).unwrap();
         assert_eq!(round, m);
         assert_eq!(parse_target("[::1]:5432"), Some(("::1".into(), 5432)));
+        assert!(s.merged(&serde_json::json!({"receiver": "http://pi.local:8080"})).is_ok());
+        assert!(s.merged(&serde_json::json!({"receiver": "http://pi.local:8080/"})).is_ok());
+        assert!(s.merged(&serde_json::json!({"receiver": "pi.local:8080"})).is_err());
+        assert!(s.merged(&serde_json::json!({"receiver": "http://pi.local:8080/?x=1"})).is_err());
+        assert!(s.merged(&serde_json::json!({"receiver": "http://u:p@pi.local"})).is_err());
+        // upstream_override is hand-edited only (not settable through the app API).
+        assert!(s.merged(&serde_json::json!({"upstream_override": {"digikey": "http://127.0.0.1:1"}})).is_err());
+        let t: Settings = toml::from_str("[upstream_override]\ndigikey = \"http://127.0.0.1:9\"\n").unwrap();
+        assert_eq!(t.upstream_override["digikey"], "http://127.0.0.1:9");
     }
 }

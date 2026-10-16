@@ -25,7 +25,7 @@ use axum::{
     http::{header, HeaderMap, HeaderValue, Method, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{any, get, post},
+    routing::{any, delete, get, post},
     Json, Router,
 };
 use pairing::{Decision, Pairing, Tokens, TokenRecord};
@@ -60,6 +60,9 @@ pub struct Gateway {
     pub(crate) kube: relay_kube::Contexts,
     /// Tests: replace a fixed upstream's base URL (e.g. "digikey" → a fake server).
     pub(crate) upstream_override: RwLock<std::collections::HashMap<String, String>>,
+    /// Honour `upstream_override` from companion.toml (non-default config dir, or
+    /// GW_COMPANION_TEST_UPSTREAMS=1).
+    pub(crate) settings_overrides: bool,
     pair_hook: RwLock<Option<PairHook>>,
 }
 
@@ -68,7 +71,13 @@ impl Gateway {
     pub fn from_user_config() -> anyhow::Result<Self> {
         let s = Settings::load()?;
         let dir = settings::dir();
-        Ok(Self::new(s, Some(dir.join("companion-tokens.json")), Some(dir.join("companion-audit.log")), secrets::Store::System))
+        let overrides = !gw_core::userconfig::is_default_config_dir() || std::env::var("GW_COMPANION_TEST_UPSTREAMS").is_ok_and(|v| v == "1");
+        if !s.upstream_override.is_empty() && !overrides {
+            eprintln!("companion: ignoring upstream_override in {} (test only: needs GW_CONFIG_DIR or GW_COMPANION_TEST_UPSTREAMS=1)", settings::path().display());
+        }
+        let mut g = Self::new(s, Some(dir.join("companion-tokens.json")), Some(dir.join("companion-audit.log")), secrets::Store::user());
+        g.settings_overrides = overrides;
+        Ok(g)
     }
 
     pub fn new(s: Settings, tokens: Option<PathBuf>, audit: Option<PathBuf>, secrets: secrets::Store) -> Self {
@@ -89,6 +98,7 @@ impl Gateway {
             supplier_tokens: Default::default(),
             kube: Default::default(),
             upstream_override: Default::default(),
+            settings_overrides: false,
             pair_hook: RwLock::new(None),
         }
     }
@@ -130,6 +140,7 @@ impl Gateway {
             "paired": self.tokens.list(),
             "pending": self.pairing.list(),
             "secrets": self.secrets.presence(),
+            "secrets_store": self.secrets.backend(),
             "docker": relay_docker::find_socket(&s.docker_host),
             "kube": relay_kube::describe(&s.kubeconfig),
             "upstreams": relay_http::upstream_ids(),
@@ -276,6 +287,10 @@ pub struct Origin(pub String);
 #[derive(Clone)]
 pub struct AuditTool(pub String);
 
+/// A note for the request's audit entry (e.g. "self-revoked").
+#[derive(Clone)]
+pub struct AuditNote(pub String);
+
 /// Host, Origin, preflight and CORS for every /v1 request; then the audit log.
 async fn gate(State(gw): State<Arc<Gateway>>, mut req: Request, next: Next) -> Response {
     let host = req.headers().get(header::HOST).and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
@@ -311,11 +326,18 @@ async fn gate(State(gw): State<Arc<Gateway>>, mut req: Request, next: Next) -> R
     }
     if path != "/v1/hello" {
         let tool = res.extensions().get::<AuditTool>().map(|t| t.0.clone()).unwrap_or_default();
-        gw.audit.log(json!({
+        let mut entry = json!({
             "at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             "origin": origin, "tool": tool, "method": method.as_str(), "path": path,
             "status": res.status().as_u16(), "ms": t0.elapsed().as_millis() as u64,
-        }));
+        });
+        if let Some(WsClose(c)) = res.extensions().get::<WsClose>() {
+            entry["close"] = json!(c);
+        }
+        if let Some(AuditNote(n)) = res.extensions().get::<AuditNote>() {
+            entry["note"] = json!(n);
+        }
+        gw.audit.log(entry);
     }
     res
 }
@@ -349,16 +371,68 @@ pub fn presented(h: &HeaderMap) -> Option<Presented> {
 
 /// Check the request's token for `scope`. Err is the response to send.
 pub fn authorize(gw: &Gateway, h: &HeaderMap, origin: &str, scope: &str) -> Result<(TokenRecord, Presented), Response> {
+    check_token(gw, h, origin, scope).map_err(|(code, msg)| err(code, msg))
+}
+
+/// [`authorize`] with the refusal as (status, message), for WebSocket close codes.
+pub fn check_token(gw: &Gateway, h: &HeaderMap, origin: &str, scope: &str) -> Result<(TokenRecord, Presented), (StatusCode, String)> {
     let Some(p) = presented(h) else {
-        return Err(err(StatusCode::UNAUTHORIZED, "pair first: POST /v1/pair, then send Authorization: Bearer <token>"));
+        return Err((StatusCode::UNAUTHORIZED, "pair first: POST /v1/pair, then send Authorization: Bearer <token>".into()));
     };
     let Some(rec) = gw.tokens.check(&p.token, origin) else {
-        return Err(err(StatusCode::UNAUTHORIZED, "unknown or revoked token for this origin: pair again"));
+        return Err((StatusCode::UNAUTHORIZED, "unknown or revoked token for this origin: pair again".into()));
     };
     if !rec.scopes.iter().any(|s| s == scope) {
-        return Err(err(StatusCode::FORBIDDEN, format!("this token does not have the {scope} scope: pair again asking for it")));
+        return Err((StatusCode::FORBIDDEN, format!("this token does not have the {scope} scope: pair again asking for it")));
     }
     Ok((rec, p))
+}
+
+// ------------------------------------------------------------------ WebSocket refusals
+
+/// The subprotocol a WebSocket client offers to have refusals delivered as close codes after
+/// the upgrade (a browser cannot read an HTTP status from a failed upgrade). On a refusal the
+/// server selects this subprotocol (so `ws.protocol` tells the page at `open` that a close with
+/// a code follows); on success it never does. Clients that don't offer it get plain HTTP
+/// errors before the upgrade, as in the first protocol v1 release.
+pub const WS_CODES: &str = "gw-companion.codes";
+
+/// Close codes: 4400 bad request, 4401 unpaired / bad token, 4403 scope, target or relay not
+/// allowed, 4502 the upstream connection failed.
+pub fn ws_close_code(status: StatusCode) -> u16 {
+    match status.as_u16() {
+        401 => 4401,
+        403 | 503 => 4403,
+        502 | 504 => 4502,
+        _ => 4400,
+    }
+}
+
+/// Did the client offer [`WS_CODES`]?
+pub fn wants_close_codes(h: &HeaderMap) -> bool {
+    h.get_all(header::SEC_WEBSOCKET_PROTOCOL).iter().any(|v| v.to_str().unwrap_or("").split(',').any(|p| p.trim() == WS_CODES))
+}
+
+/// The close code a refused WebSocket was closed with (for the audit log).
+#[derive(Clone)]
+pub struct WsClose(pub u16);
+
+/// Accept the upgrade, then close at once with `code` and `reason` (≤ 123 bytes).
+pub fn ws_refuse(ws: axum::extract::ws::WebSocketUpgrade, code: u16, reason: &str) -> Response {
+    use axum::extract::ws::{CloseFrame, Message};
+    use futures_util::{SinkExt, StreamExt};
+    let mut reason = reason.to_string();
+    while reason.len() > 123 {
+        reason.pop();
+    }
+    let mut r = ws.protocols([WS_CODES]).on_upgrade(move |sock| async move {
+        let (mut tx, mut rx) = sock.split();
+        let _ = tx.send(Message::Close(Some(CloseFrame { code, reason: reason.into() }))).await;
+        // Let the client answer the close before the socket drops.
+        let _ = tokio::time::timeout(Duration::from_secs(2), async { while let Some(Ok(_)) = rx.next().await {} }).await;
+    });
+    r.extensions_mut().insert(WsClose(code));
+    r
 }
 
 /// Attach the token's tool to a response for the audit log.
@@ -472,14 +546,31 @@ async fn pair(State(gw): State<Arc<Gateway>>, axum::Extension(Origin(origin)): a
     r
 }
 
-/// GET /v1/pair/{id} — long-polls (≤ 50 s): 200 {token}, 403 denied, 202 still pending.
+/// GET /v1/pair/{id} — long-polls (≤ 50 s). Always a quiet status so pages don't log resource
+/// errors: 202 `{status:"pending", pending:true}`; 200 `{status:"approved", token, scopes}`;
+/// 200 `{status:"denied", denied:true}`; 200 `{status:"expired", expired:true}` (expired, already
+/// collected, or asked from another origin). Until protocol v1's first release these were
+/// 403 and 404; pages should go by `status` (or the `token`/`denied`/`expired` fields).
 async fn pair_poll(State(gw): State<Arc<Gateway>>, axum::Extension(Origin(origin)): axum::Extension<Origin>, AxPath(id): AxPath<String>) -> Response {
     match gw.pairing.wait(&id, &origin, Duration::from_secs(50)).await {
-        None => err(StatusCode::NOT_FOUND, "no such pairing request (expired, or asked from another origin)"),
-        Some(Decision::Pending) => (StatusCode::ACCEPTED, Json(json!({ "pending": true }))).into_response(),
-        Some(Decision::Denied) => err(StatusCode::FORBIDDEN, "pairing denied"),
-        Some(Decision::Approved { token, scopes }) => Json(json!({ "token": token, "scopes": scopes })).into_response(),
+        None => Json(json!({ "status": "expired", "expired": true, "error": "no such pairing request (expired, or asked from another origin)" })).into_response(),
+        Some(Decision::Pending) => (StatusCode::ACCEPTED, Json(json!({ "status": "pending", "pending": true }))).into_response(),
+        Some(Decision::Denied) => Json(json!({ "status": "denied", "denied": true, "error": "pairing denied" })).into_response(),
+        Some(Decision::Approved { token, scopes }) => Json(json!({ "status": "approved", "token": token, "scopes": scopes })).into_response(),
     }
+}
+
+/// DELETE /v1/token — the page revokes its own token (its "Forget"), authenticated with the
+/// token itself (any scope). 200 {revoked: 1}; 401 for an unknown token.
+async fn token_delete(State(gw): State<Arc<Gateway>>, axum::Extension(Origin(origin)): axum::Extension<Origin>, h: HeaderMap) -> Response {
+    let Some(p) = presented(&h) else { return err(StatusCode::UNAUTHORIZED, "send the token to revoke in Authorization: Bearer") };
+    let Some(rec) = gw.tokens.revoke_token(&p.token, &origin) else {
+        return err(StatusCode::UNAUTHORIZED, "unknown or revoked token for this origin");
+    };
+    eprintln!("companion: {} revoked its own token for {:?} ({})", if origin.is_empty() { "(no origin)" } else { &origin }, rec.tool, rec.id);
+    let mut r = tagged(Json(json!({ "revoked": 1, "id": rec.id })).into_response(), &rec);
+    r.extensions_mut().insert(AuditNote("self-revoked".into()));
+    r
 }
 
 /// GET /v1/status — what the relays are connected to (no secrets). Any valid token.
@@ -522,6 +613,7 @@ pub fn router(gw: Arc<Gateway>) -> Router {
         .route("/v1/hello", get(hello))
         .route("/v1/pair", post(pair))
         .route("/v1/pair/{id}", get(pair_poll))
+        .route("/v1/token", delete(token_delete))
         .route("/v1/status", get(status))
         .route("/v1/view", post(v1_view))
         .route("/v1/relay/http/{*rest}", any(relay_http::handle))
