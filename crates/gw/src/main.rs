@@ -1,7 +1,7 @@
 //! `gw` — the gitwebsite command line. Also starts the REST server (`gw serve`) and the MCP
 //! server (`gw mcp`).
 
-use gw::{integrations, mcp, ops, server, setup, stories};
+use gw::{companion, companion_cli, integrations, mcp, ops, server, setup, stories};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -95,7 +95,22 @@ enum Cmd {
         /// Open the management UI in the browser.
         #[arg(long)]
         open: bool,
+        /// Don't start the companion gateway (relays and tool windows for the site's tools).
+        #[arg(long)]
+        no_companion: bool,
+        /// Companion port (default 7317 or companion.toml; fallbacks +1…+3).
+        #[arg(long)]
+        companion_port: Option<u16>,
+        /// Approve every companion pairing request without asking (headless use only).
+        #[arg(long)]
+        companion_auto_approve: bool,
     },
+    /// The companion gateway: pairing approvals, tokens, settings, keychain secrets.
+    #[command(subcommand)]
+    Companion(companion_cli::CompanionCmd),
+    /// The site's browser tools: list, describe, index for the show-with-tools skill, open in a window.
+    #[command(subcommand)]
+    Tools(companion_cli::ToolsCmd),
     /// Run the MCP server on stdio (for Claude Code and other MCP clients).
     Mcp,
     /// SmugMug: media hosting for images and video.
@@ -661,6 +676,11 @@ fn main() -> Result<()> {
     let j = cli.json;
     // Commands that work without a site.
     match cli.cmd {
+        Cmd::Companion(c) => {
+            let v = companion_cli::run_companion(c)?;
+            print(j, &v);
+            return Ok(());
+        }
         Cmd::Init { .. } | Cmd::Config(_) => {
             let v = match cli.cmd {
                 Cmd::Init { dir, title, author, base_url, tagline, description, pages_repo, branch, pages_checkout, no_theme_copy, no_starter, git, create_pages_repo, no_current } => {
@@ -678,20 +698,28 @@ fn main() -> Result<()> {
             print(j, &v);
             return Ok(());
         }
-        Cmd::Serve { port, open } => {
+        Cmd::Serve { port, open, no_companion, companion_port, companion_auto_approve } => {
             // Without a site the app opens on its setup screen.
             let root = match &cli.site {
                 Some(p) => Some(Site::open(Some(p))?.root),
                 None => gw_core::userconfig::resolve_site().ok(),
             };
             let rt = tokio::runtime::Runtime::new()?;
-            return rt.block_on(server::run(root, port, open));
+            let comp = (!no_companion).then(|| companion::StartOptions { ui_port: None, port: companion_port, auto_approve: companion_auto_approve });
+            return rt.block_on(server::run_with(root, port, open, comp));
         }
         _ => {}
     }
     let site = Site::open(cli.site.as_deref())?;
     let v = match cli.cmd {
-        Cmd::Serve { .. } | Cmd::Init { .. } | Cmd::Config(_) => unreachable!(),
+        Cmd::Serve { .. } | Cmd::Init { .. } | Cmd::Config(_) | Cmd::Companion(_) => unreachable!(),
+        Cmd::Tools(c) => {
+            let v = companion_cli::run_tools(&site.root, &site.config.site.base_url, c)?;
+            if v.is_null() {
+                return Ok(());
+            }
+            v
+        }
         Cmd::Mcp => return mcp::run(site.root.clone()),
         Cmd::Site => {
             let c = &site.config;

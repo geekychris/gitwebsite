@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Regenerate skills/show-with-tools/tools-index.md from the site's tool pages, so the
+# show-with-tools skill always lists the current tools, their URL parameters and presets.
+#   scripts/gen-tools-skill-index [--site <site dir>]
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+GW="${GW:-$ROOT/target/release/gw}"
+[ -x "$GW" ] || GW="$(command -v gw || true)"
+[ -n "$GW" ] || { echo "build gw first: cargo build --release -p gw" >&2; exit 1; }
+"$GW" "$@" tools index --out "$ROOT/skills/show-with-tools/tools-index.md"

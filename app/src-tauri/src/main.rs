@@ -4,9 +4,14 @@
 //!
 //! Site: $GW_SITE, else the current site in the user config (`gw config`); with neither, the
 //! window opens on the setup screen (open an existing site or create one).
-//! Port: 8790, or any free port if 8790 is taken.
+//! Port: $GW_PORT, else 8790, or any free port if that is taken.
+//! Companion gateway (relays for the site's tools): 127.0.0.1:7317 (fallbacks 7318–7320, or
+//! $GW_COMPANION_PORT); pairing requests are approved in a dialog. Tool windows (`/api/view`,
+//! MCP `tool_open`) are native windows on the preview.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+mod views;
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -30,7 +35,8 @@ fn live_url(port: u16) -> Option<String> {
 }
 
 fn bind() -> std::io::Result<TcpListener> {
-    TcpListener::bind(("127.0.0.1", 8790)).or_else(|_| TcpListener::bind(("127.0.0.1", 0)))
+    let port = std::env::var("GW_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(8790);
+    TcpListener::bind(("127.0.0.1", port)).or_else(|_| TcpListener::bind(("127.0.0.1", 0)))
 }
 
 /// Minimal HTTP call to the in-process server; returns the response body.
@@ -70,6 +76,29 @@ fn start_dictation() {
     }
 }
 
+/// Ask the user about a companion pairing request (a page wants to use the relays).
+fn ask_pairing(app: &AppHandle, req: gw::companion::pairing::PairRequest) {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+    let who = if req.origin.is_empty() { "a program on this Mac (no web origin)".to_string() } else { req.origin.clone() };
+    let tool = if req.tool.is_empty() { "a page".to_string() } else { format!("the {} tool", req.tool) };
+    let msg = format!(
+        "{tool} at {who} asks to use the gitwebsite companion:\n\n{}\n\nCode {} — check that the page shows the same code.\n\nAllow only pages you trust; you can revoke it later in Companion settings.",
+        req.scopes.join(", "),
+        req.code
+    );
+    let id = req.id.clone();
+    app.dialog()
+        .message(msg)
+        .title("Allow companion access?")
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom("Allow".into(), "Deny".into()))
+        .show(move |allow| {
+            if let Some(g) = gw::companion::global() {
+                let _ = g.pairing.decide(&id, allow, &g.tokens);
+            }
+        });
+}
+
 fn open_url(url: &str) {
     let _ = std::process::Command::new("open").arg(url).status();
 }
@@ -100,6 +129,7 @@ fn main() {
     let app_url = format!("{base}/app/");
 
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
             WebviewWindowBuilder::new(app, "main", WebviewUrl::External(app_url.parse()?))
                 .title("gitwebsite")
@@ -135,6 +165,28 @@ fn main() {
             }
 
 
+            // Tool windows for /api/view and MCP tool_open.
+            gw::companion::view::set_view_host(views::Views::new(app.handle().clone(), base.clone()));
+
+            // Companion pairing requests: a dialog (the gateway starts with the server).
+            {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    let deadline = Instant::now() + Duration::from_secs(300);
+                    while Instant::now() < deadline {
+                        if let Some(g) = gw::companion::global() {
+                            let h = handle.clone();
+                            g.set_pair_hook(move |req| {
+                                let h2 = h.clone();
+                                let _ = h.run_on_main_thread(move || ask_pairing(&h2, req));
+                            });
+                            return;
+                        }
+                        std::thread::sleep(Duration::from_millis(200));
+                    }
+                });
+            }
+
             // Menu bar icon and menu.
             let status = MenuItem::with_id(app, "status", "gitwebsite is running", false, None::<&str>)?;
             let open = MenuItem::with_id(app, "open", "Open gitwebsite", true, Some("CmdOrCtrl+O"))?;
@@ -143,11 +195,12 @@ fn main() {
             let rebuild = MenuItem::with_id(app, "rebuild", "Rebuild preview", true, None::<&str>)?;
             let check = MenuItem::with_id(app, "check", "Check site", true, None::<&str>)?;
             let publish = MenuItem::with_id(app, "publish", "Build & Publish…", true, None::<&str>)?;
+            let companion = MenuItem::with_id(app, "companion", "Companion settings…", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit gitwebsite", true, Some("CmdOrCtrl+Q"))?;
             let sep = || PredefinedMenuItem::separator(app);
             let menu = Menu::with_items(
                 app,
-                &[&status, &sep()?, &open, &preview, &live, &sep()?, &rebuild, &check, &publish, &sep()?, &quit],
+                &[&status, &sep()?, &open, &preview, &live, &sep()?, &rebuild, &check, &publish, &companion, &sep()?, &quit],
             )?;
 
             let status_item = status.clone();
@@ -169,6 +222,12 @@ fn main() {
                             Some(u) => open_url(&u),
                             None => show_main(app),
                         },
+                        "companion" => {
+                            show_main(app);
+                            if let Some(w) = app.get_webview_window("main") {
+                                let _ = w.eval("location.hash = '#companion'");
+                            }
+                        }
                         "publish" => {
                             show_main(app);
                             if let Some(w) = app.get_webview_window("main") {
@@ -210,8 +269,11 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            // Closing the window keeps the app in the menu bar.
+            // Closing the main window keeps the app in the menu bar; tool windows just close.
             if let WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() != "main" {
+                    return;
+                }
                 let _ = window.hide();
                 api.prevent_close();
             }
