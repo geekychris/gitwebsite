@@ -52,6 +52,11 @@ pub fn config_dir() -> PathBuf {
     if let Some(d) = std::env::var_os("GW_CONFIG_DIR").filter(|d| !d.is_empty()) {
         return PathBuf::from(d);
     }
+    default_config_dir()
+}
+
+/// The config directory when `GW_CONFIG_DIR` is not set.
+pub fn default_config_dir() -> PathBuf {
     if cfg!(windows) {
         if let Some(a) = std::env::var_os("APPDATA") {
             return PathBuf::from(a).join("gitwebsite");
@@ -61,6 +66,13 @@ pub fn config_dir() -> PathBuf {
         return PathBuf::from(x).join("gitwebsite");
     }
     expand_home("~/.config/gitwebsite")
+}
+
+/// Is the config directory in use the user's real one (not a `GW_CONFIG_DIR` scratch/test dir)?
+/// Things that live outside the directory (the OS keychain) are only touched for the real one.
+pub fn is_default_config_dir() -> bool {
+    let (a, b) = (config_dir(), default_config_dir());
+    a == b || (a.canonicalize().ok().is_some() && a.canonicalize().ok() == b.canonicalize().ok())
 }
 
 pub fn config_path() -> PathBuf {

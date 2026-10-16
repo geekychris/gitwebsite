@@ -128,13 +128,46 @@ async fn pairing_tokens_and_scopes() {
     let r = c.post(format!("{base}/v1/pair")).header("origin", SITE).json(&json!({"tool": "x"})).send().await.unwrap();
     let v: Value = r.json().await.unwrap();
     gw.pairing.decide(v["code"].as_str().unwrap(), false, &gw.tokens).unwrap();
+    // Denied comes back as a quiet 200 (no console error in the page).
     let r = c.get(format!("{base}{}", v["poll"].as_str().unwrap())).header("origin", SITE).send().await.unwrap();
-    assert_eq!(r.status(), 403);
+    assert_eq!(r.status(), 200);
+    let d: Value = r.json().await.unwrap();
+    assert_eq!((d["status"].as_str(), d["denied"].as_bool()), (Some("denied"), Some(true)));
+    assert!(d.get("token").is_none());
     // Another origin cannot collect someone else's pairing.
     let r = c.post(format!("{base}/v1/pair")).header("origin", SITE).json(&json!({"tool": "y"})).send().await.unwrap();
     let v: Value = r.json().await.unwrap();
     let r = c.get(format!("{base}{}", v["poll"].as_str().unwrap())).header("origin", "http://localhost:9").send().await.unwrap();
-    assert_eq!(r.status(), 404);
+    assert_eq!(r.status(), 200);
+    let d: Value = r.json().await.unwrap();
+    assert_eq!((d["status"].as_str(), d["expired"].as_bool()), (Some("expired"), Some(true)));
+    assert!(d.get("token").is_none());
+    // Pending polls stay 202.
+    let r = c.post(format!("{base}/v1/pair")).header("origin", SITE).json(&json!({"tool": "z"})).send().await.unwrap();
+    let v: Value = r.json().await.unwrap();
+    let id = v["id"].as_str().unwrap().to_string();
+    let poll = tokio::spawn({
+        let u = format!("{base}/v1/pair/{id}");
+        async move { client().get(u).header("origin", SITE).send().await.unwrap() }
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    gw.pairing.decide(&id, true, &gw.tokens).unwrap();
+    let r = poll.await.unwrap();
+    assert_eq!(r.status(), 200);
+    let d: Value = r.json().await.unwrap();
+    assert_eq!(d["status"], "approved");
+    let zt = d["token"].as_str().unwrap().to_string();
+    // Self-revoke: DELETE /v1/token with the token itself.
+    let r = c.delete(format!("{base}/v1/token")).header("origin", "http://localhost:9").bearer_auth(&zt).send().await.unwrap();
+    assert_eq!(r.status(), 401, "another origin cannot revoke it");
+    let r = c.delete(format!("{base}/v1/token")).header("origin", SITE).bearer_auth(&zt).send().await.unwrap();
+    assert_eq!(r.status(), 200);
+    assert_eq!(r.headers()["access-control-allow-origin"], SITE);
+    assert_eq!(r.json::<Value>().await.unwrap()["revoked"], 1);
+    let v: Value = c.get(format!("{base}/v1/hello")).header("origin", SITE).bearer_auth(&zt).send().await.unwrap().json().await.unwrap();
+    assert_eq!(v["paired"], false);
+    assert_eq!(c.delete(format!("{base}/v1/token")).header("origin", SITE).bearer_auth(&zt).send().await.unwrap().status(), 401);
+    assert!(gw.audit_tail(5).iter().any(|e| e["note"] == "self-revoked" && e["tool"] == "z" && e["path"] == "/v1/token"));
     // The app's own preview pages pair without asking.
     let r = c.post(format!("{base}/v1/pair")).header("origin", "http://127.0.0.1:1").json(&json!({"tool": "redis", "scopes": ["relay.tcp"]})).send().await.unwrap();
     assert_eq!(r.status(), 200);
@@ -243,6 +276,59 @@ async fn tcp_relay_allow_list() {
     // Tokens in the URL are not accepted.
     let e = connect(format!("127.0.0.1:{echo_port}&token={t}"), "x".into()).await.unwrap_err();
     assert!(e.to_string().contains("401"), "{e}");
+
+    // With `gw-companion.codes` offered, refusals are an accepted upgrade (selecting that
+    // subprotocol) and then a close with an application code and a reason.
+    let refused = |target: String, proto: String| {
+        let c = connect(target, proto);
+        async move {
+            let (mut ws, resp) = c.await.expect("upgrade accepted");
+            assert_eq!(resp.headers()["sec-websocket-protocol"], "gw-companion.codes");
+            let m = tokio::time::timeout(Duration::from_secs(5), ws.next()).await.unwrap().unwrap().unwrap();
+            match m {
+                Message::Close(Some(f)) => (u16::from(f.code), f.reason.to_string()),
+                other => panic!("expected a close, got {other:?}"),
+            }
+        }
+    };
+    let codes = |extra: &str| format!("gw-companion.v1, gw-companion.codes{extra}");
+    let (code, why) = refused("127.0.0.1:22".into(), codes(&format!(", bearer.{t}"))).await;
+    assert_eq!(code, 4403);
+    assert!(why.contains("allow-list"), "{why}");
+    let (code, _) = refused(format!("127.0.0.1:{echo_port}"), codes(", bearer.nope")).await;
+    assert_eq!(code, 4401);
+    let (code, _) = refused(format!("127.0.0.1:{echo_port}"), codes("")).await;
+    assert_eq!(code, 4401);
+    let (code, _) = refused(String::new(), codes(&format!(", bearer.{t}"))).await;
+    assert_eq!(code, 4400);
+    // Allowed, but nothing listening: 4502.
+    let dead = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        l.local_addr().unwrap().port()
+    };
+    gw.settings.write().unwrap().tcp_allow.push(format!("127.0.0.1:{dead}"));
+    let (code, why) = refused(format!("127.0.0.1:{dead}"), codes(&format!(", bearer.{t}"))).await;
+    assert_eq!(code, 4502);
+    assert!(why.contains("cannot connect"), "{why}");
+    assert!(gw.audit_tail(10).iter().any(|e| e["close"] == 4502));
+    // Success with codes offered still selects gw-companion.v1.
+    let (mut ws3, resp) = connect(format!("127.0.0.1:{echo_port}"), codes(&format!(", bearer.{t}"))).await.unwrap();
+    assert_eq!(resp.headers()["sec-websocket-protocol"], "gw-companion.v1");
+    ws3.send(Message::Binary(vec![7u8].into())).await.unwrap();
+    let m = tokio::time::timeout(Duration::from_secs(5), ws3.next()).await.unwrap().unwrap().unwrap();
+    assert_eq!(m.into_data().to_vec(), vec![7u8]);
+    // A token without the relay.tcp scope (re-pairing "test" replaces the token above).
+    let http_only = pair(&gw, &base, &["relay.http"]).await;
+    let (code, why) = refused(format!("127.0.0.1:{echo_port}"), codes(&format!(", bearer.{http_only}"))).await;
+    assert_eq!(code, 4403);
+    assert!(why.contains("scope"), "{why}");
+    // A foreign Origin is still a plain HTTP 403 before any upgrade.
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let mut req = format!("{ws_base}/v1/relay/tcp?target=127.0.0.1:{echo_port}").into_client_request().unwrap();
+    req.headers_mut().insert("origin", "https://evil.test".parse().unwrap());
+    req.headers_mut().insert("sec-websocket-protocol", codes(&format!(", bearer.{http_only}")).parse().unwrap());
+    let e = tokio_tungstenite::connect_async(req).await.unwrap_err();
+    assert!(e.to_string().contains("403"), "{e}");
 }
 
 #[cfg(unix)]
@@ -332,4 +418,42 @@ async fn git_relay_refuses_push() {
     // Not an allow-listed host.
     let r = c.get(format!("{base}/v1/relay/git/evil.test/o/r.git/info/refs?service=git-upload-pack")).header("origin", SITE).bearer_auth(&t).send().await.unwrap();
     assert_eq!(r.status(), 403);
+}
+
+#[tokio::test]
+async fn receiver_base_with_path_is_not_doubled() {
+    let up = serve(echo()).await;
+    let mut s = Settings::default();
+    s.receiver = format!("http://127.0.0.1:{up}/tar1090");
+    let (gw, base) = gateway(s, Store::memory(&[])).await;
+    let t = pair(&gw, &base, &["relay.http"]).await;
+    let c = client();
+    for p in ["tar1090/data/aircraft.json", "data/aircraft.json"] {
+        let v: Value = c.get(format!("{base}/v1/relay/http/receiver/{p}")).header("origin", SITE).bearer_auth(&t).send().await.unwrap().json().await.unwrap();
+        assert_eq!(v["path"], "/tar1090/data/aircraft.json", "{p}");
+    }
+}
+
+#[tokio::test]
+async fn git_info_refs_is_sent_whole() {
+    // A git host whose info/refs comes in several chunks (as a real server streams it).
+    let adv = "001e# service=git-upload-pack\n0000003f0123456789012345678901234567890123456789 refs/heads/main\n0000";
+    let host = Router::new().fallback(any(move || async move {
+        let chunks: Vec<Result<axum::body::Bytes, std::io::Error>> = adv.as_bytes().chunks(16).map(|c| Ok(axum::body::Bytes::copy_from_slice(c))).collect();
+        let mut r = axum::response::Response::new(axum::body::Body::from_stream(futures_util::stream::iter(chunks)));
+        r.headers_mut().insert("content-type", "application/x-git-upload-pack-advertisement".parse().unwrap());
+        r
+    }));
+    let up = serve(host).await;
+    let mut s = Settings::default();
+    s.git_http_hosts = vec![format!("127.0.0.1:{up}")];
+    let (gw, base) = gateway(s, Store::memory(&[])).await;
+    let t = pair(&gw, &base, &["relay.git"]).await;
+    let r = client().get(format!("{base}/v1/relay/git/127.0.0.1:{up}/o/r.git/info/refs?service=git-upload-pack"))
+        .header("origin", SITE).bearer_auth(&t).send().await.unwrap();
+    assert_eq!(r.status(), 200);
+    assert_eq!(r.headers()["content-length"], adv.len().to_string());
+    assert!(r.headers().get("transfer-encoding").is_none());
+    assert_eq!(r.headers()["content-type"], "application/x-git-upload-pack-advertisement");
+    assert_eq!(r.text().await.unwrap(), adv);
 }

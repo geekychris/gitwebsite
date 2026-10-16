@@ -108,7 +108,7 @@ pub fn run_companion(c: CompanionCmd) -> Result<Value> {
         CompanionCmd::Status => match appclient::get("/api/companion") {
             Ok(v) => v,
             Err(e) => json!({ "running": false, "note": format!("{e:#}"), "settings_file": crate::companion::settings::path().display().to_string(),
-                "settings": Settings::load()?, "secrets": secrets::Store::System.presence() }),
+                "settings": Settings::load()?, "secrets": secrets::Store::user().presence() }),
         },
         CompanionCmd::Pending => appclient::get("/api/companion")?["pending"].clone(),
         CompanionCmd::Approve { code } => appclient::send("POST", &format!("/api/companion/pair/{code}"), &json!({ "allow": true }))?,
@@ -148,7 +148,7 @@ pub fn run_companion(c: CompanionCmd) -> Result<Value> {
             }
         }
         CompanionCmd::Secret(s) => {
-            let store = secrets::Store::System;
+            let store = secrets::Store::user();
             match s {
                 SecretCmd::List => store.presence(),
                 SecretCmd::Set { name, value } => {

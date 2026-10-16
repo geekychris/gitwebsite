@@ -68,7 +68,14 @@ fn upstream(gw: &Gateway, id: &str) -> Option<(String, Kind)> {
     if base.is_empty() {
         return None;
     }
-    let base = gw.upstream_override.read().unwrap().get(id).cloned().unwrap_or(base);
+    let base = gw
+        .upstream_override
+        .read()
+        .unwrap()
+        .get(id)
+        .cloned()
+        .or_else(|| gw.settings_overrides.then(|| gw.settings.read().unwrap().upstream_override.get(id).cloned()).flatten())
+        .unwrap_or(base);
     Some((base, kind))
 }
 
@@ -95,6 +102,23 @@ pub fn upstream_url(base: &str, rest: &str) -> Option<String> {
     let url = format!("{}/{}", base.trim_end_matches('/'), rest);
     let (a, b) = (reqwest::Url::parse(&url).ok()?, reqwest::Url::parse(base).ok()?);
     (a.host_str() == b.host_str() && a.port_or_known_default() == b.port_or_known_default() && a.scheme() == b.scheme()).then_some(url)
+}
+
+/// A configured base should be scheme://host[:port] only, but if it carries a path (e.g.
+/// `http://piaware.local:8080/tar1090`) and the page's path already starts with that same path,
+/// strip it so it is not doubled (`…/tar1090/tar1090/data/aircraft.json`).
+pub fn dedupe_base_path<'a>(base: &str, rest: &'a str) -> &'a str {
+    let Ok(u) = reqwest::Url::parse(base) else { return rest };
+    let bp = u.path().trim_matches('/');
+    if bp.is_empty() {
+        return rest;
+    }
+    match rest.strip_prefix(bp) {
+        Some("") => "",
+        Some(r) if r.starts_with('/') => &r[1..],
+        Some(r) if r.starts_with('?') => r,
+        _ => rest,
+    }
 }
 
 #[derive(Clone)]
@@ -139,6 +163,7 @@ async fn relay(gw: &Gateway, method: Method, uri: &Uri, h: &HeaderMap, body: Byt
             (StatusCode::NOT_FOUND, axum::Json(json!({"error": format!("unknown upstream {id:?}"), "upstreams": upstream_ids()}))).into_response()
         };
     };
+    let rest = dedupe_base_path(&base, rest);
     let Some(mut url) = upstream_url(&base, rest) else {
         return err(StatusCode::BAD_REQUEST, "path refused: this is not an open proxy");
     };
@@ -320,6 +345,19 @@ async fn supplier_token(gw: &Gateway, which: &str) -> anyhow::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn base_path_not_doubled() {
+        assert_eq!(dedupe_base_path("http://pi:8080", "data/aircraft.json"), "data/aircraft.json");
+        assert_eq!(dedupe_base_path("http://pi:8080/", "data/aircraft.json"), "data/aircraft.json");
+        assert_eq!(dedupe_base_path("http://pi:8080/tar1090", "tar1090/data/aircraft.json"), "data/aircraft.json");
+        assert_eq!(dedupe_base_path("http://pi:8080/tar1090/", "tar1090/data/aircraft.json"), "data/aircraft.json");
+        assert_eq!(dedupe_base_path("http://pi:8080/tar1090", "data/aircraft.json"), "data/aircraft.json");
+        assert_eq!(dedupe_base_path("http://pi:8080/tar1090", "tar1090x/a"), "tar1090x/a");
+        assert_eq!(dedupe_base_path("http://pi:8080/a/b", "a/b/c?x=1"), "c?x=1");
+        assert_eq!(upstream_url("http://pi:8080/tar1090", dedupe_base_path("http://pi:8080/tar1090", "tar1090/data/aircraft.json")).as_deref(),
+            Some("http://pi:8080/tar1090/data/aircraft.json"));
+    }
 
     #[test]
     fn not_an_open_proxy() {

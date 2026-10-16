@@ -1703,6 +1703,7 @@ async function viewCompanion() {
     ${(st.pending || []).length ? `<div class="panel"><h2>Waiting for approval</h2>${st.pending.map(p => `
       <div class="row-item"><b>${esc(p.tool || 'a page')}</b> at <span class="mono">${esc(p.origin || '(no origin)')}</span> wants ${esc(p.scopes.join(', '))} — code <b class="mono">${esc(p.code)}</b>
         <button class="primary" data-allow="${esc(p.id)}">Allow</button> <button class="danger" data-deny="${esc(p.id)}">Deny</button></div>`).join('')}</div>` : ''}
+    <p class="small muted">Chrome asks before an https page may reach this computer's 127.0.0.1 (Local Network Access): when a tool on the site first connects, allow “access other apps and services on this device” in Chrome's prompt, or the tool will report that the app isn't running.</p>
     <div class="panel"><h2>Paired</h2>
       ${(st.paired || []).length ? `<table><tr><th>Origin</th><th>Tool</th><th>Scopes</th><th>Last used</th><th></th></tr>${st.paired.map(t => `
         <tr><td class="mono">${esc(t.origin || '(no origin)')}</td><td>${esc(t.tool)}</td><td>${esc((t.scopes || []).join(', '))}</td><td>${esc(t.last_used || '—')}</td>
@@ -1726,13 +1727,13 @@ async function viewCompanion() {
         HTTP upstreams: ${esc((st.upstreams || []).join(', '))}.</p>
     </div>
     <div class="panel"><h2>Supplier API secrets</h2>
-      <p class="small muted">Kept in the macOS Keychain and added to parts-supplier requests by the companion; pages never see them. Values are never shown.</p>
+      <p class="small muted">${String(st.secrets_store || '').startsWith('file:') ? `Kept in <span class="mono">${esc(String(st.secrets_store).slice(5))}</span> (a non-default config directory never uses the Keychain)` : 'Kept in the macOS Keychain'} and added to parts-supplier requests by the companion; pages never see them. Values are never shown.</p>
       <table><tr><th>Secret</th><th>Present</th><th></th></tr>${Object.entries(st.secrets || {}).map(([k, v]) => `
         <tr><td class="mono">${esc(k)}</td><td>${yes(v)}</td><td><button data-secret="${esc(k)}">Set…</button> ${v ? `<button class="danger" data-unsecret="${esc(k)}">Remove</button>` : ''}</td></tr>`).join('')}</table>
     </div>
     <div class="panel"><h2>Audit log</h2>
       ${audit.entries.length ? `<table><tr><th>When</th><th>Origin</th><th>Tool</th><th>Request</th><th>Status</th></tr>${audit.entries.map(e => `
-        <tr><td class="small">${esc(e.at)}</td><td class="mono small">${esc(e.origin || '—')}</td><td>${esc(e.tool || '')}</td><td class="mono small">${esc(e.method)} ${esc(e.path)}</td><td>${esc(e.status)}</td></tr>`).join('')}</table>` : '<p class="muted">No requests yet.</p>'}
+        <tr><td class="small">${esc(e.at)}</td><td class="mono small">${esc(e.origin || '—')}</td><td>${esc(e.tool || '')}</td><td class="mono small">${esc(e.method)} ${esc(e.path)}${e.note ? ` <span class="muted">(${esc(e.note)})</span>` : ''}</td><td>${esc(e.status)}${e.close ? ` → close ${esc(e.close)}` : ''}</td></tr>`).join('')}</table>` : '<p class="muted">No requests yet.</p>'}
     </div>`;
   const refresh = () => viewCompanion();
   $$('[data-allow]').forEach(b => b.onclick = () => guard(async () => { await api('POST', '/companion/pair/' + b.dataset.allow, { allow: true }); toast('Allowed'); refresh(); }));
@@ -1751,8 +1752,19 @@ async function viewCompanion() {
       const k = el.dataset.set;
       patch[k] = el.tagName === 'TEXTAREA' ? el.value.split('\n').map(x => x.trim()).filter(Boolean) : el.value.trim();
     });
+    // Relay bases are scheme://host[:port] only; the page's path is joined on.
+    const warn = [];
+    for (const k of ['receiver', 'kafka_rest', 'redpanda_proxy', 'redpanda_admin']) {
+      const v = patch[k];
+      if (!v) continue;
+      let u;
+      try { u = new URL(v); } catch { throw new Error(`${k}: not a URL — use http://host:port`); }
+      if (!/^https?:$/.test(u.protocol)) throw new Error(`${k}: must start with http:// or https://`);
+      if (u.search || u.hash || u.username || u.password) throw new Error(`${k}: use scheme://host[:port] only (no query, fragment or user:password@)`);
+      if (u.pathname !== '/') warn.push(`${k} has a path (${u.pathname}): bases should be scheme://host[:port]; the companion won't double it if the tool's path starts with it`);
+    }
     const r = await api('PUT', '/companion/settings', patch);
-    toast(r.restart_needed ? 'Saved — restart the app for the port change' : 'Saved');
+    toast((r.restart_needed ? 'Saved — restart the app for the port change' : 'Saved') + (warn.length ? '. Note: ' + warn.join('; ') : ''));
     refresh();
   });
 }

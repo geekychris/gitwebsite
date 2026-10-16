@@ -45,7 +45,7 @@ before it shows any "run the relay script" instructions.
   as curl or the CLI. It is allowed, but it still needs a token.
 * *CORS*: allowed origins are reflected in `Access-Control-Allow-Origin` (with `Vary: Origin`).
   Preflights (`OPTIONS`) are answered with `Access-Control-Allow-Private-Network: true`, so Chrome's
-  Private Network Access lets an https page call localhost.
+  Private Network Access lets an https page call localhost. See also <<local-network-access>>.
 * *Tokens*: every endpoint except `/v1/hello` and pairing needs a pairing token with the scope of the
   relay being used. A page can send it three ways:
 ** `Authorization: Bearer <token>`. In this case the page's Authorization header is _not_ forwarded
@@ -53,14 +53,16 @@ before it shows any "run the relay script" instructions.
 ** `X-Companion-Token: <token>`. In this case the page's own `Authorization` header _is_ forwarded to
    the upstream: a token for a private git repo, Kafka REST credentials, or a supplier token.
 ** For WebSockets, the `Sec-WebSocket-Protocol` header: offer `gw-companion.v1, bearer.<token>`. The
-   server picks `gw-companion.v1`. If only `bearer.<token>` is offered, it is echoed back.
+   server picks `gw-companion.v1`. If only `bearer.<token>` is offered, it is echoed back. Also offer
+   `gw-companion.codes` to get refusals as close codes (see <<ws-refusals>>).
 +
 Tokens in the query string are never accepted.
 * Each token is bound to the origin it was issued to. Only its SHA-256 hash is stored, in
   `<config dir>/companion-tokens.json` (mode 0600).
 * Every request except `/v1/hello` is written to the audit log (`<config dir>/companion-audit.log`,
   JSON lines, rotated at 2 MB). Each entry records the time, origin, tool, method, path (without the
-  query) and status.
+  query) and status, plus `close` (the close code of a refused WebSocket) and `note` (e.g.
+  `self-revoked`) when they apply.
 
 === Pairing
 
@@ -76,11 +78,48 @@ scopes are given, the request covers all the relays but not `view`.
   and the same code. The request is also listed on the app's Companion page, and in
   `gw companion pending`. You can approve it with `gw companion approve <code>`, or refuse it with
   `gw companion deny <code>`.
-* `GET /v1/pair/<id>`, sent from the same origin, long-polls for up to 50 s. It returns
-  `200 {"token", "scopes"}`, `403` if the request was denied, `202 {"pending":true}` (poll again), or
-  `404` if the request has expired or the poll comes from a different origin.
+* `GET /v1/pair/<id>`, sent from the same origin, long-polls for up to 50 s. Every outcome is a quiet
+  success status, so a denied or expired request does not log a resource error in the page's console:
++
+[cols="1,3"]
+|===
+| Status | Body
+
+| `202` | `{"status":"pending","pending":true}`: poll again.
+| `200` | `{"status":"approved","token":…,"scopes":[…]}`
+| `200` | `{"status":"denied","denied":true,"error":"pairing denied"}`
+| `200` | `{"status":"expired","expired":true,"error":…}`: expired, already collected, or polled from a
+          different origin.
+|===
++
+Go by `status` (or by which of `token`, `denied`, `expired` is present), not by the HTTP status
+alone. Earlier builds answered `403` for denied and `404` for expired; a page should keep treating
+those the same way, so it works with both.
 * Pairing again from the same origin and tool replaces the old token. To revoke a token, use the
   Companion page, `gw companion revoke <id or origin>`, or `DELETE /api/companion/tokens/<id>`.
+* `DELETE /v1/token`, authenticated with the token itself (any scope, from the origin it was issued
+  to), revokes it: the page's "Forget". It returns `200 {"revoked":1,"id":…}`, or `401` for an unknown
+  or already revoked token, and is written to the audit log with the note `self-revoked`.
+
+[[local-network-access]]
+=== Chrome's Local Network Access prompt
+
+Chrome (Local Network Access, the successor to Private Network Access) asks the visitor for
+permission before an https page such as `https://geekychris.github.io` may reach `127.0.0.1`. The
+first request to the companion from the site, including the `/v1/hello` probe, triggers the prompt
+("… wants to access other apps and services on this device"); until it is allowed, every request
+fails like a network error, exactly as if the app were not running. So pages should:
+
+* probe lazily, on a user action (pressing *Connect* or *Use the gitwebsite app*, choosing a live
+  source), not on page load — otherwise every visitor, most without the app, gets a permission
+  prompt they did not ask for;
+* after a failed probe, say "the gitwebsite app isn't running, or Chrome blocked access to this
+  computer" and point at the site-settings toggle ("Local network access", in the padlock menu);
+* treat `http://127.0.0.1:*` and `http://localhost:*` pages (the app's own preview) as exempt:
+  they are not prompted, so probing them eagerly is fine.
+
+The app's Companion page carries the same hint for users: allow the prompt in Chrome when a site
+tool first connects.
 
 `GET /v1/status` (with any valid token) describes the relays: upstream ids, which user upstreams are
 configured, which supplier secrets are present, the TCP allow-list, the Docker socket, the Kubernetes
@@ -105,6 +144,15 @@ and the resulting host must be the upstream's own. Cookies and the page's Origin
 | `redpanda-admin` | the Redpanda Admin API (setting) | GET (and POST with override to GET)
 |===
 
+The configured bases (`receiver`, `kafka_rest`, `redpanda_proxy`, `redpanda_admin`) are
+*scheme://host[:port] only*: the page's path is joined on, so `receiver/data/aircraft.json` with
+`receiver = "http://piaware.local:8080"` reaches `http://piaware.local:8080/data/aircraft.json`. A
+base with a path still works: with `http://piaware.local:8080/tar1090`, both
+`receiver/data/aircraft.json` and `receiver/tar1090/data/aircraft.json` reach
+`…/tar1090/data/aircraft.json` (a request path that already starts with the base's path is not
+doubled). Bases with a query, a fragment or `user:password@` are refused; the Companion page
+checks this when you save, and notes a base that has a path.
+
 The relay keeps the rate-limit headers (`X-Rate-Limit-Remaining`, `X-RateLimit-*`, `Retry-After`).
 It adds `X-Relay-Upstream` and `X-Relay-Cache` to each response.
 
@@ -117,7 +165,26 @@ It adds `X-Relay-Upstream` and `X-Relay-Cache` to each response.
 * `nexar_client_id` and `nexar_client_secret`: the relay gets a Nexar token.
 
 The secrets live in the macOS Keychain (service `gitwebsite-companion`). The environment variables
-`DIGIKEY_CLIENT_ID` and so on take precedence. Set them in the app's Companion page or with
+`DIGIKEY_CLIENT_ID` and so on take precedence. A companion run with a non-default config directory
+(`GW_CONFIG_DIR` pointing anywhere but your real one: a scratch or test instance) never reads or
+writes the Keychain: its secrets live in `<config dir>/companion-secrets.json` (mode 0600), so it
+cannot see or overwrite your real supplier keys. `/api/companion` reports which store is in use
+(`secrets_store`: `keychain:gitwebsite-companion` or `file:<path>`).
+
+*Testing supplier relays.* `upstream_override` in `companion.toml` points fixed upstreams at a mock:
+
+[source,toml]
+----
+[upstream_override]
+digikey = "http://127.0.0.1:9911"     # also used for its OAuth token endpoint
+nexar-id = "http://127.0.0.1:9911"
+----
+
+It is honoured only for a non-default config directory, or when `GW_COMPANION_TEST_UPSTREAMS=1` is
+set; for your real config it is ignored with a warning. It cannot be set through the app's API. E2E:
+`GW_CONFIG_DIR=$(mktemp -d) gw companion secret set digikey …`, write the override, then
+`GW_CONFIG_DIR=… gw serve --port 8890 --companion-port 7400 --companion-auto-approve` (ports other
+than your running app's). Set them in the app's Companion page or with
 `gw companion secret set digikey`. You can see whether each secret is present, but no API ever
 returns its value.
 
@@ -129,6 +196,28 @@ feed. The target must be on `tcp_allow`, which by default is `127.0.0.1:5432` an
 add entries such as a Pi's `:30005` Beast or `:30002` raw port. `localhost`, `127.0.0.1` and `::1`
 count as the same host. Every WebSocket gets its own TCP connection, so each Postgres session is its
 own backend. This relay is used by the Postgres playground, the Redis client and the Mode S feeds.
+
+[[ws-refusals]]
+*Refusals.* A browser cannot read the HTTP status of a failed WebSocket upgrade, so a page that
+offers the extra subprotocol `gw-companion.codes` (for example
+`new WebSocket(url, ['gw-companion.v1', 'gw-companion.codes', 'bearer.' + token])`) gets refusals
+after the upgrade instead: the server accepts it selecting `gw-companion.codes` (on success it never
+selects that one, so `ws.protocol === 'gw-companion.codes'` at `open` means a refusal follows) and
+closes at once with an application close code and a reason (at most 123 bytes):
+
+[cols="1,3"]
+|===
+| Code | Meaning
+
+| `4400` | bad request (e.g. no `?target=`)
+| `4401` | not paired: no token, or an unknown or revoked one for this origin — pair again
+| `4403` | not allowed: the token lacks the `relay.tcp` scope, the target is not on `tcp_allow`, or the relay is turned off
+| `4502` | the companion could not connect to the target (refused, unreachable, or timed out)
+|===
+
+Without `gw-companion.codes`, refusals are HTTP errors before the upgrade (`400`, `401`, `403`,
+`502`, `503`, `504`), as in the first release. Host and Origin failures are always a plain HTTP
+`403` before any upgrade, whatever is offered: a page from a foreign origin learns nothing.
 
 === Docker: `/v1/relay/docker/<api path>`
 
@@ -176,6 +265,11 @@ relay works like `git-relay.py`:
 * Hosts must be on the allow-list: github.com, gitlab.com, codeberg.org, bitbucket.org, plus
   `git_hosts`. The upstream is always https.
 * Push (`git-receive-pack`) is refused unless `git_allow_push = true`.
+* `info/refs` responses are read whole from the git host and sent with a `Content-Length`;
+  `git-upload-pack` (the packfile) is streamed. isomorphic-git stops reading the ref advertisement
+  at its final flush-pkt and releases the reader without draining the body; when that body was
+  streamed (chunked), Chrome could list the request as `net::ERR_ABORTED` after its `200`. It was
+  harmless (the clone carried on), and sending `info/refs` whole avoids it.
 
 == Tool viewer
 
@@ -257,6 +351,8 @@ git_allow_push = false
 docker_host = ""                         # empty: auto-detect
 kubeconfig = ""                          # empty: $KUBECONFIG or ~/.kube/config
 auto_approve = false
+# [upstream_override]                    # testing only, see "Testing supplier relays"
+# digikey = "http://127.0.0.1:9911"
 [relays]
 http = true
 tcp = true
@@ -268,12 +364,17 @@ git = true
 The Companion page shows:
 
 * the gateway's status and URL
-* pending pairing requests (Allow/Deny)
+* a hint about Chrome's Local Network Access prompt
+* pending pairing requests (Allow/Deny), with the tool and the page's origin
 * paired origins and tools (Revoke)
 * relay toggles, allow-lists and upstream URLs
 * the Docker socket and Kubernetes contexts it found
-* supplier secrets, shown as present or absent (Set or Remove; values are never shown)
-* the audit log
+* supplier secrets, shown as present or absent (Set or Remove; values are never shown), and where
+  they are kept
+* the audit log (with WebSocket close codes and self-revocations)
+
+The app's pairing dialog is titled with the tool's name and shows the tool, the page's origin, each
+requested scope with what it allows, and the code.
 
 Changes to companion state through `/api/companion/*` and `/api/view` are refused from any page whose
 Origin differs from the app's own. A changed port takes effect after a restart.
@@ -299,4 +400,4 @@ gw tools list [--category C] [-q words] | info <slug> | index [--out FILE] | ope
 * The kubeconfig's YAML is read with serde_yaml, and multiple `$KUBECONFIG` files are merged with the
   first file winning.
 * Linux builds have no persistent secret store (the keychain feature is macOS and Windows only). Use
-  the environment variables instead.
+  the environment variables instead (or, for a non-default config directory, the secrets file).

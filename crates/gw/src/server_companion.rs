@@ -208,7 +208,7 @@ pub async fn secret_put(h: HeaderMap, AxPath(name): AxPath<String>, Json(b): Jso
         return e;
     }
     let r = tokio::task::spawn_blocking(move || {
-        let store = companion::secrets::Store::System;
+        let store = companion::secrets::Store::user();
         if b.value.trim().is_empty() {
             store.delete(&name)
         } else {
@@ -229,7 +229,7 @@ pub async fn secret_delete(h: HeaderMap, AxPath(name): AxPath<String>) -> Respon
         return e;
     }
     let r = tokio::task::spawn_blocking(move || {
-        let s = companion::secrets::Store::System;
+        let s = companion::secrets::Store::user();
         s.delete(&name).map(|_| s.presence())
     })
     .await;

@@ -97,7 +97,19 @@ pub async fn handle(
     let status = resp.status();
     let ctype = resp.headers().get("content-type").cloned().unwrap_or(HeaderValue::from_static("application/octet-stream"));
     let host = url.split('/').nth(2).unwrap_or("").to_string();
-    let mut out = Response::new(Body::from_stream(resp.bytes_stream().map_err(std::io::Error::other)));
+    // The ref advertisement (info/refs) is small, and isomorphic-git stops reading it at the
+    // final flush-pkt and releases the reader without draining the stream. Streamed with chunked
+    // encoding, the response's last chunk could still be in flight then, and Chrome reported the
+    // request as net::ERR_ABORTED after its 200. So info/refs is buffered and sent whole, with a
+    // Content-Length; the packfile (git-upload-pack) is read to the end and stays streamed.
+    let mut out = if url.contains("/info/refs") {
+        match resp.bytes().await {
+            Ok(b) => Response::new(Body::from(b)),
+            Err(e) => return tagged(err(StatusCode::BAD_GATEWAY, format!("upstream error: {e}")), &rec),
+        }
+    } else {
+        Response::new(Body::from_stream(resp.bytes_stream().map_err(std::io::Error::other)))
+    };
     *out.status_mut() = status;
     let hd = out.headers_mut();
     hd.insert("content-type", ctype);

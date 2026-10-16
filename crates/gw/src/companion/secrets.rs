@@ -3,9 +3,15 @@
 //! Credential Manager) under the service `gitwebsite-companion`; environment variables
 //! (`DIGIKEY_CLIENT_ID`, … as for parts-relay.py) take precedence. Values are never returned
 //! by any API — only whether each one is present.
+//!
+//! A non-default config directory (`GW_CONFIG_DIR` pointing anywhere but the user's real one:
+//! scratch and test instances) never touches the Keychain: its secrets live in
+//! `<dir>/companion-secrets.json` (mode 0600), so a test instance can neither read nor
+//! overwrite the user's real supplier keys.
 
 use anyhow::{bail, Result};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 pub const SERVICE: &str = "gitwebsite-companion";
@@ -38,26 +44,69 @@ fn check(name: &str) -> Result<()> {
 }
 
 pub enum Store {
-    /// Environment, then the OS keychain.
-    System,
+    /// Environment, then the OS keychain (the user's real config directory).
+    Keychain,
+    /// Environment, then a 0600 JSON file (a non-default config directory).
+    File(PathBuf),
     /// In memory (tests).
     Memory(Mutex<HashMap<String, String>>),
 }
 
+fn env_value(name: &str) -> Option<String> {
+    let env = NAMES.iter().find(|(n, _)| *n == name).map(|(_, e)| *e)?;
+    std::env::var(env).ok().filter(|v| !v.is_empty())
+}
+
+fn read_file(p: &Path) -> HashMap<String, String> {
+    std::fs::read_to_string(p).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+}
+
+fn write_file(p: &Path, m: &HashMap<String, String>) -> Result<()> {
+    if let Some(d) = p.parent() {
+        std::fs::create_dir_all(d)?;
+    }
+    let tmp = p.with_extension("json.tmp");
+    std::fs::write(&tmp, serde_json::to_vec_pretty(m)?)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
+    }
+    std::fs::rename(&tmp, p)?;
+    Ok(())
+}
+
 impl Store {
+    /// The store for the config directory in use: the Keychain for the user's real one, a file
+    /// in the directory for any other (`GW_CONFIG_DIR`).
+    pub fn user() -> Self {
+        if gw_core::userconfig::is_default_config_dir() {
+            Store::Keychain
+        } else {
+            Store::File(gw_core::userconfig::config_dir().join("companion-secrets.json"))
+        }
+    }
+
     pub fn memory(pairs: &[(&str, &str)]) -> Self {
         Store::Memory(Mutex::new(pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()))
+    }
+
+    /// Where the secrets are kept, for the status page.
+    pub fn backend(&self) -> String {
+        match self {
+            Store::Keychain => format!("keychain:{SERVICE}"),
+            Store::File(p) => format!("file:{}", p.display()),
+            Store::Memory(_) => "memory".into(),
+        }
     }
 
     pub fn get(&self, name: &str) -> Option<String> {
         match self {
             Store::Memory(m) => m.lock().unwrap().get(name).cloned(),
-            Store::System => {
-                let env = NAMES.iter().find(|(n, _)| *n == name).map(|(_, e)| *e)?;
-                if let Ok(v) = std::env::var(env) {
-                    if !v.is_empty() {
-                        return Some(v);
-                    }
+            Store::File(p) => env_value(name).or_else(|| read_file(p).get(name).cloned().filter(|v| !v.is_empty())),
+            Store::Keychain => {
+                if let Some(v) = env_value(name) {
+                    return Some(v);
                 }
                 keyring::Entry::new(SERVICE, name).ok()?.get_password().ok().filter(|v| !v.is_empty())
             }
@@ -70,7 +119,12 @@ impl Store {
             Store::Memory(m) => {
                 m.lock().unwrap().insert(name.into(), value.into());
             }
-            Store::System => keyring::Entry::new(SERVICE, name)?.set_password(value)?,
+            Store::File(p) => {
+                let mut m = read_file(p);
+                m.insert(name.into(), value.into());
+                write_file(p, &m)?;
+            }
+            Store::Keychain => keyring::Entry::new(SERVICE, name)?.set_password(value)?,
         }
         Ok(())
     }
@@ -81,7 +135,13 @@ impl Store {
             Store::Memory(m) => {
                 m.lock().unwrap().remove(name);
             }
-            Store::System => match keyring::Entry::new(SERVICE, name)?.delete_credential() {
+            Store::File(p) => {
+                let mut m = read_file(p);
+                if m.remove(name).is_some() {
+                    write_file(p, &m)?;
+                }
+            }
+            Store::Keychain => match keyring::Entry::new(SERVICE, name)?.delete_credential() {
                 Ok(()) | Err(keyring::Error::NoEntry) => {}
                 Err(e) => return Err(e.into()),
             },
@@ -101,5 +161,34 @@ impl Store {
     /// Whether every field of a supplier is present.
     pub fn holds(&self, supplier: &str) -> bool {
         fields(supplier).map(|f| f.iter().all(|n| self.get(n).is_some())).unwrap_or(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_store_round_trip_0600() {
+        let d = std::env::temp_dir().join(format!("gw-sec-{}", std::process::id()));
+        let p = d.join("companion-secrets.json");
+        let s = Store::File(p.clone());
+        // Uses a name with no environment variable set in CI (mouser).
+        if std::env::var("MOUSER_API_KEY").is_err() {
+            assert!(s.get("mouser_api_key").is_none());
+            s.set("mouser_api_key", "k1").unwrap();
+            assert_eq!(s.get("mouser_api_key").as_deref(), Some("k1"));
+            assert!(s.holds("mouser"));
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o600);
+            }
+            s.delete("mouser_api_key").unwrap();
+            assert!(s.get("mouser_api_key").is_none());
+        }
+        assert!(s.set("nope", "x").is_err());
+        assert!(s.backend().starts_with("file:"));
+        let _ = std::fs::remove_dir_all(&d);
     }
 }
