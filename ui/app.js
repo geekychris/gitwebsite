@@ -369,22 +369,43 @@ async function viewRegistry() {
 
 // ---------------------------------------------------------------- Media
 
-async function viewMedia() {
-  const lib = await get('/media');
+async function viewMedia(filter) {
+  filter = filter || sessionStorage.getItem('gw-media-filter') || 'all';
+  const [lib, usage, album] = await Promise.all([get('/media'), get('/media/usage').catch(() => ({})), get('/smugmug/album').catch(() => ({}))]);
   const keys = Object.keys(lib).sort();
+  const pick = { all: () => true, video: m => m.kind === 'video', smugmug: m => m.provider === 'smugmug', unused: (m, k) => !(usage[k] || []).length };
+  const shown = keys.filter(k => pick[filter](lib[k], k));
+  const count = f => keys.filter(k => pick[f](lib[k], k)).length;
+  const chip = (f, label) => `<button class="chip${f === filter ? ' on' : ''}" data-filter="${f}">${label} <span class="muted">${count(f)}</span></button>`;
   main.innerHTML = `
     <h1>Media</h1><p class="sub">Images and video that content uses as <code>media:&lt;key&gt;</code> — files in the site, any URL, or SmugMug.</p>
-    <div class="bar"><button class="primary" data-add>Add by URL</button><span class="muted">SmugMug uploads: <code>gw smugmug …</code> or the MCP tools.</span></div>
-    <div class="media-grid">${keys.map(k => {
-      const m = lib[k];
+    <div class="bar"><button class="primary" data-add>Add by URL</button>
+      ${album.album_key ? `<span class="muted">Site media album on SmugMug (unlisted): ${album.web ? `<a href="${esc(album.web)}" target="_blank" rel="noopener">${esc(album.album_key)} ↗</a>` : esc(album.album_key)}</span>` : ''}
+      <span class="muted">Upload: <code>gw smugmug upload &lt;file&gt;</code> or the MCP tools.</span></div>
+    <div class="bar">${chip('all', 'All')}${chip('video', 'Video')}${chip('smugmug', 'SmugMug')}${chip('unused', 'Not used yet')}</div>
+    <div class="media-grid">${shown.map(k => {
+      const m = lib[k], ids = m.ids || {};
+      const processing = m.provider === 'smugmug' && m.kind === 'video' && ids.note;
       const src = m.thumb || m.url;
-      const thumb = m.kind === 'video' ? `<video src="${esc(m.url)}" muted preload="metadata"></video>` : `<img src="${esc(src)}" alt="${esc(m.alt)}" loading="lazy">`;
+      const thumb = m.kind === 'video' && !processing ? `<video src="${esc(m.url)}" poster="${esc(m.thumb || '')}" muted controls preload="none"></video>` : `<img src="${esc(src)}" alt="${esc(m.alt)}" loading="lazy">`;
       const snippet = m.kind === 'video' ? `video::media:${k}[]` : `image::media:${k}[${m.alt || ''}]`;
+      const used = usage[k] || [];
+      const page = ids.web_uri || (m.provider === 'smugmug' ? m.url : '');
       return `<div class="tile"><div class="thumb">${thumb}</div><div class="meta"><strong>${esc(k)}</strong>
-        <span class="pill">${esc(m.provider)}</span> <span class="pill">${esc(m.kind)}</span><br>
-        <code>${esc(snippet)}</code><br><button data-copy="${esc(snippet)}">Copy snippet</button></div></div>`;
-    }).join('') || '<p class="empty">No media yet.</p>'}</div>`;
+        <span class="pill">${esc(m.provider)}</span> <span class="pill">${esc(m.kind)}</span>${processing ? ' <span class="pill warn">processing on SmugMug</span>' : ''}<br>
+        <code>${esc(snippet)}</code><br><button data-copy="${esc(snippet)}">Copy snippet</button>
+        ${page ? ` <a href="${esc(page)}" target="_blank" rel="noopener">SmugMug page ↗</a>` : ''}
+        ${m.provider === 'smugmug' ? ` <button data-refresh="${esc(k)}" title="Look it up on SmugMug again (e.g. once a video has finished processing)">Refresh</button>` : ''}
+        <div class="muted">${used.length ? 'Used in ' + used.map(u => `<a href="#edit/${encodeURIComponent(u.id)}">${esc(u.title)}</a>${u.draft ? ' (draft)' : ''}`).join(', ') : 'Not used in any page yet'}</div></div></div>`;
+    }).join('') || '<p class="empty">No media here.</p>'}</div>`;
+  $$('[data-filter]').forEach(b => b.onclick = () => { sessionStorage.setItem('gw-media-filter', b.dataset.filter); viewMedia(b.dataset.filter); });
   $$('[data-copy]').forEach(b => b.onclick = () => navigator.clipboard.writeText(b.dataset.copy).then(() => toast('Copied ' + b.dataset.copy), () => toast(b.dataset.copy)));
+  $$('[data-refresh]').forEach(b => b.onclick = () => guard(async () => {
+    b.disabled = true;
+    const r = await api('POST', `/media/${encodeURIComponent(b.dataset.refresh)}/refresh`);
+    toast(r.playable === false ? 'Still processing on SmugMug — try again in a minute' : 'Refreshed ' + b.dataset.refresh);
+    viewMedia(filter);
+  }));
   $('[data-add]').onclick = async () => {
     const v = await form('Add media', [
       { name: 'key', label: 'Key (letters, digits, - _ .)', required: true },
@@ -395,7 +416,7 @@ async function viewMedia() {
     ], 'Add');
     if (v) guard(async () => {
       await api('POST', '/media', { ...v, provider: v.url.startsWith('/') ? 'local' : 'external' });
-      viewMedia();
+      viewMedia(filter);
     });
   };
 }

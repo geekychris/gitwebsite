@@ -254,3 +254,8 @@ button.mic:hover, button.mic:focus-visible { opacity: 1; border-color: var(--lin
 .panel > button { align-self: flex-start; }
 .row-item { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .55rem .2rem; border-bottom: 1px solid var(--line); }
 [data-site-switch] select { width: 100%; margin-bottom: .3rem; }
+.pill.warn { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+.chip { border-radius: 999px; padding: .2rem .7rem; }
+.chip.on { background: var(--link); color: #fff; border-color: var(--link); }
+.chip.on .muted { color: inherit; opacity: .8; }
+.media-grid .thumb video { width: 100%; }
