@@ -8,7 +8,8 @@
 //! * `?tls=1` → https; `?insecure=1` also accepts a self-signed certificate (LAN only, which
 //!   this relay always is). Both are removed from the query sent upstream.
 //! * Headers passed: Content-Type, Accept, Range, the vendor headers `hue-application-key` and
-//!   `X-Auth-Token`, and Authorization — from `X-Upstream-Authorization` (so it doesn't clash
+//!   `X-Auth-Token`, the AWS headers `X-Amz-Target`, `X-Amz-Date`, `X-Amz-Security-Token` and
+//!   `X-Amz-Content-Sha256` (DynamoDB Local, LocalStack), and Authorization — from `X-Upstream-Authorization` (so it doesn't clash
 //!   with the companion's own `Authorization: Bearer`), or the page's `Authorization` when the
 //!   token came in `X-Companion-Token`. Cookies and the Origin never go upstream.
 
@@ -22,8 +23,16 @@ use axum::{
 use std::sync::Arc;
 
 pub const MAX_BODY: usize = 64 * 1024 * 1024;
-const PASS: &[&str] = &["content-type", "accept", "range", "hue-application-key", "x-auth-token"];
-const KEEP: &[&str] = &["content-type", "content-length", "content-range", "accept-ranges", "etag", "last-modified", "retry-after", "server"];
+// AWS-style JSON APIs on the LAN (DynamoDB Local, MinIO admin, LocalStack) need the target and the
+// SigV4 headers the page signed with.
+const PASS: &[&str] = &[
+    "content-type", "accept", "range", "hue-application-key", "x-auth-token",
+    "x-amz-target", "x-amz-date", "x-amz-security-token", "x-amz-content-sha256",
+];
+const KEEP: &[&str] = &[
+    "content-type", "content-length", "content-range", "accept-ranges", "etag", "last-modified", "retry-after", "server",
+    "x-amzn-requestid", "x-amz-crc32", "x-amz-request-id",
+];
 
 /// Split `host[:port]` (IPv6 in brackets). Returns (host without brackets, port, URL authority).
 pub fn split_authority(a: &str) -> Option<(String, Option<u16>, String)> {

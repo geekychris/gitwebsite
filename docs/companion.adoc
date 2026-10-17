@@ -301,7 +301,7 @@ ECP, WebHDFS/HttpFS, MinIO, Samsung Tizen REST.
 * Methods: GET, HEAD, POST, PUT, PATCH, DELETE. Bodies up to 64 MB, streamed both ways; no
   overall timeout, so event streams work.
 * Request headers passed: `Content-Type`, `Accept`, `Range`, the vendor headers
-  `hue-application-key` and `X-Auth-Token`, and `Authorization`, taken from
+  `hue-application-key` and `X-Auth-Token`, the AWS headers `X-Amz-Target`, `X-Amz-Date`, `X-Amz-Security-Token` and `X-Amz-Content-Sha256` (for DynamoDB Local and LocalStack), and `Authorization`, taken from
   `X-Upstream-Authorization` (so it does not clash with the companion's own
   `Authorization: Bearer`). When the token comes in `X-Companion-Token`, the page's own
   `Authorization` is passed as in v1 (`X-Upstream-Authorization` wins if both are sent). Cookies,
