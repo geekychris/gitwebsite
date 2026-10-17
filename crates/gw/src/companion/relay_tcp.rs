@@ -4,7 +4,8 @@
 //! `&mode=text` the server sends text frames (Mode S AVR). The token comes in the
 //! `Sec-WebSocket-Protocol` header as `bearer.<token>` — never in the URL. A client that also
 //! offers `gw-companion.codes` gets refusals as close codes after the upgrade (4400, 4401,
-//! 4403, 4502) instead of an HTTP error a browser cannot see.
+//! 4403, 4502) instead of an HTTP error a browser cannot see. A paired page's first connection
+//! to a new LAN target (v1.2) waits while the app asks the user; approving adds it.
 
 use super::{check_token, err, pairing::TokenRecord, settings::parse_target, tagged, wants_close_codes, ws_close_code, ws_refuse, Gateway, Origin};
 use axum::{
@@ -79,9 +80,28 @@ pub async fn handle(
     if q.target.trim().is_empty() {
         return refuse(ws, StatusCode::BAD_REQUEST, "missing ?target=host:port".into(), Some(&rec));
     }
-    let Some((host, port)) = allowed(&q.target, &s.tcp_allow) else {
-        let msg = format!("target {:?} is not on the TCP allow-list (add it in the app's Companion settings)", q.target);
-        return refuse(ws, StatusCode::FORBIDDEN, msg, Some(&rec));
+    let (host, port) = match allowed(&q.target, &s.tcp_allow) {
+        Some(x) => x,
+        None => {
+            // v1.2: a new LAN target asks the user (and approving adds it); others are refused.
+            let Some((h, p)) = parse_target(&q.target) else {
+                return refuse(ws, StatusCode::BAD_REQUEST, format!("target {:?} must be host:port", q.target), Some(&rec));
+            };
+            let lan_addrs = super::lan::resolve(&h, &gw.dns).await;
+            let refused = match &lan_addrs {
+                Ok(a) if super::lan::own_port_refused(a, p, &gw.own_ports()) => Some(format!("{h}:{p} is the companion's or the app's own port")),
+                Ok(_) => None,
+                Err(e) => Some(format!("target {:?} is not on the TCP allow-list (add it in the app's Companion settings; only LAN targets are offered for approval: {e})", q.target)),
+            };
+            if let Some(msg) = refused {
+                return refuse(ws, StatusCode::FORBIDDEN, msg, Some(&rec));
+            }
+            let t = if h.contains(':') { format!("[{h}]:{p}") } else { format!("{h}:{p}") };
+            if let Err((status, msg)) = gw.ask_approval("tcp", &t, &origin, &rec.tool, &format!("TCP {t}")).await {
+                return refuse(ws, status, msg, Some(&rec));
+            }
+            (h, p)
+        }
     };
     let up = match tokio::time::timeout(Duration::from_secs(10), TcpStream::connect((host.as_str(), port))).await {
         Ok(Ok(s)) => s,

@@ -46,7 +46,12 @@ sha2 = "0.10"
 toml.workspace = true
 hex = "0.4"
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
+# companion v1.2: the WebSocket relay's upstream client (TLS via rustls/ring, as reqwest)
+tokio-tungstenite = "0.28"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+webpki-roots = "1"
 
 [dev-dependencies]
-tokio-tungstenite = "0.28"
+rcgen = { version = "0.13", default-features = false, features = ["ring", "pem", "crypto"] }
 image = { version = "0.25", default-features = false, features = ["jpeg"] }

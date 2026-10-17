@@ -35,12 +35,46 @@ pub struct Relays {
     pub docker: bool,
     pub kube: bool,
     pub git: bool,
+    pub lan: bool,
+    pub ws: bool,
+    pub s3: bool,
 }
 
 impl Default for Relays {
     fn default() -> Self {
-        Relays { http: true, tcp: true, docker: true, kube: true, git: true }
+        Relays { http: true, tcp: true, docker: true, kube: true, git: true, lan: true, ws: true, s3: true }
     }
+}
+
+/// An S3-compatible endpoint for `relay/s3/<name>/…`. The access key id and secret are in the
+/// secret store (`s3:<name>:access_key_id`, `s3:<name>:secret_access_key`), never here.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct S3Profile {
+    /// `https://s3.us-east-1.amazonaws.com`, `http://nas.local:9000` (MinIO), … — scheme://host[:port].
+    pub endpoint: String,
+    pub region: String,
+    /// `endpoint/bucket/key` (MinIO, most self-hosted stores) instead of `bucket.endpoint/key`.
+    pub path_style: bool,
+    /// Accept a self-signed certificate (LAN endpoints only).
+    pub insecure: bool,
+}
+
+/// A profile name: letters, digits, `-`, `_` (1–64), not `presign`.
+pub fn s3_name_ok(n: &str) -> bool {
+    !n.is_empty() && n.len() <= 64 && n != "presign" && n.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// A `relay/lan` allow-list entry: `host` (any port) or `host:port`, lower-cased.
+pub fn parse_host_entry(e: &str) -> Option<(String, Option<u16>)> {
+    let e = e.trim().to_ascii_lowercase();
+    if let Some((h, p)) = parse_target(&e) {
+        if super::lan::host_syntax_ok(&h) || super::lan::literal(&h).is_some() {
+            return Some((h, Some(p)));
+        }
+    }
+    let h = e.trim_start_matches('[').trim_end_matches(']').to_string();
+    (super::lan::host_syntax_ok(&h)).then_some((h, None))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -73,9 +107,19 @@ pub struct Settings {
     pub docker_host: String,
     /// kubeconfig to read (never written); empty: $KUBECONFIG, else ~/.kube/config.
     pub kubeconfig: String,
+    /// LAN hosts `relay/lan` and LAN `ws://`/`wss://` targets may reach: `host` (any port) or
+    /// `host:port`; IPs, names and mDNS `.local`. A paired page's first request to a new LAN
+    /// host asks the user, and approving adds it here.
+    pub lan_hosts: Vec<String>,
+    /// Public `wss://` hosts (`host` or `host:port`) `relay/ws` may reach (added by hand only).
+    pub ws_allow: Vec<String>,
+    /// Ask in the app before each S3 DeleteObject.
+    pub s3_confirm_delete: bool,
     /// Approve every pairing request without asking (headless `gw serve --companion-auto-approve`).
     pub auto_approve: bool,
     pub relays: Relays,
+    /// S3-compatible endpoints for `relay/s3/<name>/…`.
+    pub s3_profiles: BTreeMap<String, S3Profile>,
     /// Testing only: replace a fixed upstream's base URL, e.g. `digikey = "http://127.0.0.1:9999"`,
     /// so supplier relays can be tested end to end against a mock. Honoured only for a
     /// non-default config directory (`GW_CONFIG_DIR`) or with `GW_COMPANION_TEST_UPSTREAMS=1`;
@@ -100,8 +144,12 @@ impl Default for Settings {
             git_allow_push: false,
             docker_host: String::new(),
             kubeconfig: String::new(),
+            lan_hosts: vec![],
+            ws_allow: vec![],
+            s3_confirm_delete: true,
             auto_approve: false,
             relays: Relays::default(),
+            s3_profiles: BTreeMap::new(),
             upstream_override: BTreeMap::new(),
         }
     }
@@ -171,6 +219,29 @@ impl Settings {
         for (name, u) in [("receiver", &self.receiver), ("kafka_rest", &self.kafka_rest), ("redpanda_proxy", &self.redpanda_proxy), ("redpanda_admin", &self.redpanda_admin)] {
             if !u.is_empty() {
                 check_base(u).with_context(|| format!("{name} {u:?}"))?;
+            }
+        }
+        for e in &self.lan_hosts {
+            let (h, _) = parse_host_entry(e).with_context(|| format!("lan_hosts entry {e:?} must be host or host:port"))?;
+            if let Some(ip) = super::lan::literal(&h) {
+                if !super::lan::ip_lan(ip) {
+                    anyhow::bail!("lan_hosts entry {e:?} is a public address (LAN means RFC 1918, link-local, loopback or .local)");
+                }
+            }
+        }
+        for e in &self.ws_allow {
+            parse_host_entry(e).with_context(|| format!("ws_allow entry {e:?} must be host or host:port"))?;
+        }
+        for (n, p) in &self.s3_profiles {
+            if !s3_name_ok(n) {
+                anyhow::bail!("S3 profile name {n:?}: letters, digits, - and _ only (not \"presign\")");
+            }
+            check_base(&p.endpoint).with_context(|| format!("S3 profile {n}: endpoint {:?}", p.endpoint))?;
+            if reqwest::Url::parse(&p.endpoint).map(|u| u.path() != "/").unwrap_or(true) {
+                anyhow::bail!("S3 profile {n}: endpoint must be scheme://host[:port] with no path");
+            }
+            if p.region.is_empty() || !p.region.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
+                anyhow::bail!("S3 profile {n}: region {:?} (e.g. us-east-1; MinIO: us-east-1)", p.region);
             }
         }
         for (id, u) in &self.upstream_override {

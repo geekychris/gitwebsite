@@ -980,6 +980,7 @@ fn router_for(st: AppState) -> Router {
         .route("/api/companion/settings", axum::routing::put(sc::settings_put))
         .route("/api/companion/audit", get(sc::audit))
         .route("/api/companion/pair/{which}", post(sc::pair_decide))
+        .route("/api/companion/approvals/{which}", post(sc::approval_decide))
         .route("/api/companion/tokens/{id}", axum::routing::delete(sc::token_revoke))
         .route("/api/companion/secrets/{name}", axum::routing::put(sc::secret_put).delete(sc::secret_delete))
         .route("/app", get(|| async { Redirect::permanent("/app/") }))

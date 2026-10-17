@@ -21,19 +21,23 @@ viewer through MCP to show you things: diagrams, plots, simulations.
 * `<config dir>/server.json` records where the running app listens (`ui_port`, `companion_port`,
   `pid`). `gw mcp` and `gw companion …` read it to find the app.
 
-== Protocol v1
+== Protocol v1 (1.2)
 
 `GET /v1/hello` returns:
 
 [source,json]
 ----
-{"name":"gitwebsite-companion","version":"1",
- "capabilities":["relay.http","relay.tcp","relay.docker","relay.kube","relay.git","view"],
+{"name":"gitwebsite-companion","version":"1.2",
+ "capabilities":["relay.http","relay.tcp","relay.docker","relay.kube","relay.git",
+                 "relay.lan","relay.ws","relay.s3","view"],
  "paired":false,"scopes":[],"app":false}
 ----
 
 `app` is true for pages served by the app's own preview. A page should call `/v1/hello` first,
-before it shows any "run the relay script" instructions.
+before it shows any "run the relay script" instructions. A capability is listed only while its
+relay is turned on. Version `1.2` is protocol v1 plus the LAN, WebSocket and S3 relays, first-use
+approvals and more fixed HTTP upstreams (see <<v12>>); everything from `1` is unchanged, so a
+page should test for a capability (`relay.lan`), not compare versions.
 
 === Security on every request
 
@@ -46,6 +50,10 @@ before it shows any "run the relay script" instructions.
 * *CORS*: allowed origins are reflected in `Access-Control-Allow-Origin` (with `Vary: Origin`).
   Preflights (`OPTIONS`) are answered with `Access-Control-Allow-Private-Network: true`, so Chrome's
   Private Network Access lets an https page call localhost. See also <<local-network-access>>.
+  Methods allowed: GET, HEAD, POST, PUT, PATCH, DELETE. Requested headers are allowed as asked.
+  Exposed response headers include `Content-Range`, `Content-Length`, `Accept-Ranges`, `ETag`,
+  `Last-Modified`, `X-Relay-Location`, `X-Amz-Request-Id`, `X-Amz-Version-Id` and the rate-limit
+  headers.
 * *Tokens*: every endpoint except `/v1/hello` and pairing needs a pairing token with the scope of the
   relay being used. A page can send it three ways:
 ** `Authorization: Bearer <token>`. In this case the page's Authorization header is _not_ forwarded
@@ -67,8 +75,11 @@ Tokens in the query string are never accepted.
 === Pairing
 
 `POST /v1/pair` with the body `{"tool":"<slug>","scopes":["relay.tcp", …]}` starts pairing. The
-scopes are `relay.http`, `relay.tcp`, `relay.docker`, `relay.kube`, `relay.git` and `view`. If no
-scopes are given, the request covers all the relays but not `view`.
+scopes are `relay.http`, `relay.tcp`, `relay.docker`, `relay.kube`, `relay.git`, `relay.lan`,
+`relay.ws`, `relay.s3` and `view`. If no scopes are given, the request covers the v1 relays
+(`relay.http`, `relay.tcp`, `relay.docker`, `relay.kube`, `relay.git`), not `view` and not the
+v1.2 relays: `relay.lan`, `relay.ws` and `relay.s3` reach your network and storage, so a page must
+name them.
 
 * Pages from the app's own preview (`http://127.0.0.1:<ui port>`) are paired at once and get
   `200 {"token": …, "scopes": […]}`. So does any page when the companion was started with
@@ -138,6 +149,8 @@ and the resulting host must be the upstream's own. Cookies and the page's Origin
 | Upstream | Goes to | Methods
 
 | `adsblol`, `adsbfi`, `opensky`, `awc` | api.adsb.lol, opendata.adsb.fi, opensky-network.org, aviationweather.gov | GET (cached for 2 s)
+| `noaa-coops`, `ndbc`, `pskreporter`, `open-meteo` (1.2) | api.tidesandcurrents.noaa.gov, www.ndbc.noaa.gov, retrieve.pskreporter.info, api.open-meteo.com | GET (cached for 2 s)
+| `open-elevation` (1.2) | an alias of `open-meteo` (api.open-meteo.com, e.g. `open-elevation/v1/elevation?latitude=…&longitude=…`), *not* api.open-elevation.com | GET (cached for 2 s)
 | `receiver` | your ADS-B receiver (setting `receiver`, e.g. `http://piaware.local:8080`) | GET (cached for 2 s)
 | `digikey`, `mouser`, `nexar`, `nexar-id` | the parts suppliers' APIs | GET, POST (bodies up to 64 KB, header allow-list)
 | `kafka-rest`, `redpanda-proxy` | your Kafka REST proxy or Redpanda HTTP Proxy (settings) | GET, POST, PUT, DELETE; POST with `X-Method-Override: GET` becomes a GET with a body
@@ -193,7 +206,10 @@ returns its value.
 The relay copies bytes, unchanged, between the WebSocket and a new TCP connection. Frames are binary
 in both directions. With `mode=text`, the server sends text frames instead, for the Mode S AVR raw
 feed. The target must be on `tcp_allow`, which by default is `127.0.0.1:5432` and `127.0.0.1:6379`;
-add entries such as a Pi's `:30005` Beast or `:30002` raw port. `localhost`, `127.0.0.1` and `::1`
+add entries such as a Pi's `:30005` Beast or `:30002` raw port. Since 1.2, a paired page's first
+connection to a target that is not listed but is on the LAN (see <<lan-def>>) waits while the app
+asks you (<<approvals>>); allowing adds `host:port` to `tcp_allow`. Public targets (for example
+APRS-IS `rotate.aprs2.net:14580`) are never offered for approval: add them by hand. `localhost`, `127.0.0.1` and `::1`
 count as the same host. Every WebSocket gets its own TCP connection, so each Postgres session is its
 own backend. This relay is used by the Postgres playground, the Redis client and the Mode S feeds.
 
@@ -271,6 +287,165 @@ relay works like `git-relay.py`:
   streamed (chunked), Chrome could list the request as `net::ERR_ABORTED` after its `200`. It was
   harmless (the clone carried on), and sending `info/refs` whole avoids it.
 
+[[v12]]
+=== LAN devices: `/v1/relay/lan/<host[:port]>/<path>` (1.2, scope `relay.lan`)
+
+HTTP(S) to a device on your local network: Home Assistant's REST API, Shelly, Tasmota, Hue, Roku
+ECP, WebHDFS/HttpFS, MinIO, Samsung Tizen REST.
+
+* `host` is an IP, a name or an mDNS `.local` name; IPv6 in brackets (`[fe80::1]:80`). The port
+  defaults to 80, or 443 with `?tls=1`.
+* `?tls=1` connects with https. `?insecure=1` (with `tls=1`) accepts a self-signed certificate
+  (Hue, webOS, Tizen). Both are removed from the query sent upstream; the rest of the query is
+  passed as sent.
+* Methods: GET, HEAD, POST, PUT, PATCH, DELETE. Bodies up to 64 MB, streamed both ways; no
+  overall timeout, so event streams work.
+* Request headers passed: `Content-Type`, `Accept`, `Range`, the vendor headers
+  `hue-application-key` and `X-Auth-Token`, and `Authorization`, taken from
+  `X-Upstream-Authorization` (so it does not clash with the companion's own
+  `Authorization: Bearer`). When the token comes in `X-Companion-Token`, the page's own
+  `Authorization` is passed as in v1 (`X-Upstream-Authorization` wins if both are sent). Cookies,
+  the Origin and the pairing token never go upstream.
+* Response headers kept: `Content-Type`, `Content-Length`, `Content-Range`, `Accept-Ranges`,
+  `ETag`, `Last-Modified`, `Retry-After`, `Server`, plus `X-Relay-Upstream: lan`. Redirects are not
+  followed; a `Location` comes back as `X-Relay-Location` (and is dropped, so the browser doesn't
+  follow it around the relay — for WebHDFS's two-step create, read `X-Relay-Location` and send
+  the second request through the relay too).
+* The host must be on `lan_hosts`. The first request from a paired page to a host that isn't
+  waits while the app asks you; allowing adds the *host* (any port) to `lan_hosts`. Enter
+  `host:port` by hand for a tighter entry.
+
+[[lan-def]]
+*What counts as the LAN.* RFC 1918 (`10/8`, `172.16/12`, `192.168/16`), link-local
+(`169.254/16`, `fe80::/10`), loopback (`127/8`, `::1`) and IPv6 unique-local (`fc00::/7`, the v6
+RFC 1918). Carrier-grade NAT (`100.64/10`, Tailscale) is not. A public address is refused at
+once (`403`, no prompt), including in `lan_hosts`. Names, `.local` included, are resolved and
+*every* address must be on the LAN; the connection is then made only to checked addresses — the
+LAN HTTP client re-checks each lookup at connect time, and the WebSocket relay connects to the
+address it checked — so a name cannot be rebound to a public address between the check and the
+connection. A name other than `localhost` that resolves to loopback is refused (a rebinding
+trick); use `127.0.0.1` or `localhost`. The companion's and the app's own ports on this machine
+(its own, the UI port, 7317–7320 and 8790) are always refused, so a page cannot reach the app's
+REST API through a relay. Insecure TLS is allowed only for LAN targets.
+
+=== WebSockets: `/v1/relay/ws?target=<ws(s)://host[:port]/path>[&insecure=1]` (1.2, scope `relay.ws`)
+
+A WebSocket proxy: LG webOS SSAP (`ws://tv:3000`, `wss://tv:3001` with `insecure=1`), the Home
+Assistant WebSocket API, Neo4j over WebSocket, the Samsung Tizen remote (`wss://tv:8002`).
+
+* A LAN target uses the same `lan_hosts` allow-list and the same first-use approval as relay/lan.
+* A public target must be `wss://` and its host (or `host:port`) on `ws_allow`, which you edit by
+  hand (no prompt). `insecure=1` is refused for it, and `ws://` to a public host always is.
+* Text and binary frames pass through unchanged; pings are answered at each end; a close (with its
+  code and reason) is passed on. 16 MB per message.
+* Authentication as for relay/tcp: `Sec-WebSocket-Protocol: gw-companion.v1, bearer.<token>`, and
+  `gw-companion.codes` for close-code refusals (4400 bad target, 4401 not paired, 4403 not
+  allowed / public / denied / scope, 4502 cannot connect, TLS failed or handshake failed).
+* Other subprotocols the page offers (e.g. `mqtt`) are offered upstream without the companion's
+  own; if the upstream picks one, it is picked for the page too (`ws.protocol === 'mqtt'`), else
+  `gw-companion.v1`. The page's Origin is not sent upstream.
+
+=== S3: `/v1/relay/s3/<profile>/<bucket>/<key…>` (1.2, scope `relay.s3`)
+
+S3-compatible storage (AWS S3, MinIO, R2, B2, Ceph, Garage), signed by the companion with
+Signature Version 4 from a named *profile*: endpoint (`scheme://host[:port]`, no path), region,
+path-style (`endpoint/bucket/key`, for MinIO and most self-hosted stores) or virtual-host style
+(`bucket.endpoint/key`), and `insecure` (self-signed, LAN endpoints only). The access key id and
+secret are in the secret store as `s3:<profile>:access_key_id` and
+`s3:<profile>:secret_access_key`; no API returns them.
+
+[cols="2,1,3"]
+|===
+| Request | S3 operation | Notes
+
+| `GET /v1/relay/s3` | — | `{"profiles":[{"name","endpoint","region","path_style","insecure","credentials":true}]}` — never secrets
+| `GET …/<p>` | ListBuckets |
+| `GET …/<p>/<bucket>?prefix=&delimiter=&continuation-token=&start-after=&max-keys=&fetch-owner=&encoding-type=` | ListObjectsV2 | `list-type=2` is added; other parameters are refused (400)
+| `GET …/<p>/<bucket>/<key>` | GetObject | `Range`, `If-Match`, `If-None-Match`, `If-(Un)Modified-Since` passed; `versionId`, `partNumber`, `response-content-*` allowed; streamed
+| `HEAD …/<p>/<bucket>/<key>` | HeadObject |
+| `PUT …/<p>/<bucket>/<key>` | PutObject | needs a `Content-Length` (send a Blob/ArrayBuffer; chunked → 411), at most 100 MB (413), streamed with `UNSIGNED-PAYLOAD`; `Content-Type`, `Content-MD5`, `Cache-Control`, `Content-Disposition`, `Content-Encoding`, `Content-Language`, `Expires` and `x-amz-meta-*` passed
+| `DELETE …/<p>/<bucket>/<key>[?versionId=]` | DeleteObject | waits for your confirmation in the app (<<approvals>>) unless `s3_confirm_delete = false`; a denial is `403`
+| `POST …/<p>/presign` `{"method":"GET\|PUT\|HEAD","bucket":…,"key":…,"expires":900}` | presigned URL | `{"url","method","expires"}`; `expires` 1–604800 s (default 900); DELETE refused. The URL goes straight to the store (its CORS rules apply)
+|===
+
+Responses keep `Content-Type`, `Content-Length`, `Content-Range`, `Accept-Ranges`, `ETag`,
+`Last-Modified`, `Content-Disposition`, `Content-Encoding`, `x-amz-request-id`,
+`x-amz-version-id`, `x-amz-delete-marker`, `x-amz-storage-class` and `x-amz-meta-*`, and add
+`X-Relay-S3-Op`. S3's own XML errors pass through with their status. Other operations (bucket
+create/delete, ACLs, policies, multipart) are refused (`405`). Keys may not contain `.` or `..`
+segments or control characters. The signer is tested against AWS's published SigV4 test suite and
+the S3 API reference's examples.
+
+[[approvals]]
+=== First-use approvals (1.2)
+
+When a paired page asks for a LAN host that is not on `lan_hosts` (relay/lan, relay/ws), a LAN TCP
+target not on `tcp_allow`, or an S3 deletion, the request *waits* (up to 90 s) while the app shows
+a dialog with the tool, the page's origin, what it asked for and a 6-digit code. The request is
+also listed on the Companion page and in `gw companion approvals`; decide it with
+`gw companion approve <code>` / `gw companion deny <code>`, or by target with
+`gw companion lan approve <host>` / `gw companion tcp approve <host:port>`.
+
+* Allowed: the request goes ahead, and a LAN host or TCP target is added to its allow-list
+  (saved in `companion.toml`). An S3 deletion approves that one deletion only.
+* Denied: `403` (WebSocket close `4403`) with "denied"; the same target from the same origin is
+  refused at once, without asking again, for 5 minutes.
+* Undecided after 90 s: `403` / `4403` with "waiting for approval in the app (code …)"; the
+  question stays open (5 minutes) and a retry waits on the same one.
+* Concurrent requests for the same target share one question. With `auto_approve`
+  (`--companion-auto-approve`, headless only), first-use requests and S3 deletions are approved
+  too.
+
+Every decision is in the audit log (`{"event":"approval","kind","target","origin","tool",
+"decision","by"}`), and so are settings changes (`{"event":"settings","keys"}`) and secret changes
+(`{"event":"secret","names","action"}`, names only).
+
+=== Testing a site tool against v1.2
+
+Run a scratch companion (its own config directory: file-backed secrets, never the Keychain; ports
+away from the real app's 8790/7317):
+
+----
+export GW_CONFIG_DIR=$(mktemp -d)
+gw serve --port 8891 --companion-port 7401            # prompts: answer with the CLI below
+# or, headless, approving pairing and first-use requests automatically:
+gw serve --port 8891 --companion-port 7401 --companion-auto-approve
+
+# in another shell, with the same GW_CONFIG_DIR (and GW_APP_PORT=8891):
+gw companion approvals                 # first-use requests waiting
+gw companion approve 123456            # a pairing or first-use code
+gw companion lan add 127.0.0.1         # pre-allow a fake device
+gw companion ws add echo.websocket.org # a public wss:// host
+gw companion s3 add minio --endpoint http://127.0.0.1:9000 --region us-east-1 --path-style
+gw companion secret set s3:minio:access_key_id --value minioadmin
+gw companion secret set s3:minio:secret_access_key --value minioadmin
+----
+
+Point the page's companion base at `http://127.0.0.1:7401`. Fakes on `127.0.0.1` count as LAN
+devices. The repository's e2e tests (`crates/gw/tests/companion_v12.rs`,
+`companion_cli_e2e.rs`) show fakes for a LAN device (plain and self-signed TLS), a WebSocket echo
+(ws and self-signed wss) and an S3 server that verifies SigV4.
+
+=== Deviations from the v1.2 draft spec
+
+These were decided while building v1.2; the URL shapes are as in the draft.
+
+* Pairing with no scopes does not include `relay.lan`, `relay.ws` or `relay.s3`; ask for them.
+* A first-use request waits up to 90 s in place, then answers `403` "waiting for approval" (the
+  question stays open); a denial is remembered for 5 minutes.
+* A LAN approval allows the host on any port (`lan_hosts` entry `host`); `host:port` entries can
+  be added by hand.
+* relay/lan also allows HEAD, passes `Range`, and passes the page's `Authorization` when the token
+  is in `X-Companion-Token` (as the v1 relays do). Redirects come back with `X-Relay-Location`.
+* LAN includes IPv6 unique-local `fc00::/7`; names (other than `localhost`) that resolve to
+  loopback, and the companion's/app's own ports, are refused.
+* TCP first-use prompts only for LAN targets; public TCP targets must be added by hand.
+* S3: `GET /v1/relay/s3/<p>` is ListBuckets; PutObject needs a `Content-Length` (no chunked
+  uploads); `s3_confirm_delete` can turn the delete confirmation off; `--companion-auto-approve`
+  approves deletions.
+* Upstreams: no `wsprnet` (wspr.live already sends CORS headers); `open-elevation` is an alias of
+  `open-meteo` (api.open-meteo.com), not api.open-elevation.com.
+
 == Tool viewer
 
 The app's REST API opens tools in windows:
@@ -342,6 +517,9 @@ enabled = true
 port = 7317
 extra_origins = []                       # more page origins
 tcp_allow = ["127.0.0.1:5432", "127.0.0.1:6379"]
+lan_hosts = []                           # relay/lan + LAN ws: "hue.local", "192.168.1.20:8123"
+ws_allow = []                            # public wss:// hosts for relay/ws
+s3_confirm_delete = true
 receiver = ""                            # ADS-B receiver web base
 kafka_rest = ""
 redpanda_proxy = ""
@@ -359,6 +537,15 @@ tcp = true
 docker = true
 kube = true
 git = true
+lan = true
+ws = true
+s3 = true
+
+[s3_profiles.minio]                      # credentials: gw companion secret set s3:minio
+endpoint = "http://nas.local:9000"
+region = "us-east-1"
+path_style = true
+insecure = false
 ----
 
 The Companion page shows:
@@ -366,8 +553,10 @@ The Companion page shows:
 * the gateway's status and URL
 * a hint about Chrome's Local Network Access prompt
 * pending pairing requests (Allow/Deny), with the tool and the page's origin
+* pending first-use approvals (LAN hosts, TCP targets, S3 deletions; Allow/Deny)
 * paired origins and tools (Revoke)
-* relay toggles, allow-lists and upstream URLs
+* relay toggles, allow-lists (TCP, LAN hosts, public wss hosts) and upstream URLs
+* S3 profiles (add, remove, set credentials — write-only; shown as present or absent)
 * the Docker socket and Kubernetes contexts it found
 * supplier secrets, shown as present or absent (Set or Remove; values are never shown), and where
   they are kept
@@ -383,15 +572,21 @@ Origin differs from the app's own. A changed port takes effect after a restart.
 
 ----
 gw serve [--no-companion] [--companion-port N] [--companion-auto-approve]
-gw companion status | pending | approve <code> | deny <code> | tokens | revoke <id|origin> | audit [--n N]
+gw companion status | pending | approvals | approve <code> | deny <code> | tokens | revoke <id|origin> | audit [--n N]
 gw companion set <key> <value>
-gw companion secret list | set <digikey|mouser|nexar|field> [--value V] | delete <name>
+gw companion lan list | add <host[:port]> | remove <entry> | approve <host|code>
+gw companion tcp list | add <host:port> | remove <entry> | approve <host:port|code>
+gw companion ws  list | add <host[:port]> | remove <entry>
+gw companion s3  list | add <name> --endpoint URL [--region R] [--path-style] [--insecure] | remove <name>
+gw companion secret list | set <digikey|mouser|nexar|s3:<profile>|field> [--value V] | delete <name>
 gw tools list [--category C] [-q words] | info <slug> | index [--out FILE] | open <slug> [-p k=v]… [--example E] [--hash H] [--new]
 ----
 
 == Limits
 
 * The gateway binds 127.0.0.1 only. There is no option to expose it to a network.
+* `gw companion …` finds the app through `<config dir>/server.json` or `GW_APP_PORT`; with a
+  scratch `GW_CONFIG_DIR` it never falls back to 8790 (the real app's port).
 * There is no TLS. Traffic between a page and the companion is plain HTTP or WebSocket on localhost,
   so the Postgres and Redis protocols are unencrypted there, as they were with the scripts.
 * Screenshots work only in the macOS app. On other platforms they return 501.

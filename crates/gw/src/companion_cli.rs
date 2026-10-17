@@ -13,10 +13,25 @@ pub enum CompanionCmd {
     Status,
     /// Pairing requests waiting for a decision.
     Pending,
-    /// Approve a pairing request by its 6-digit code (shown on the page) or id.
+    /// Approve a pairing request or a first-use approval (LAN host, TCP target, S3 delete) by
+    /// its 6-digit code (shown on the page / in the app) or id.
     Approve { code: String },
-    /// Deny a pairing request.
+    /// Deny a pairing request or a first-use approval.
     Deny { code: String },
+    /// First-use approvals waiting for a decision (LAN hosts, TCP targets, S3 deletions).
+    Approvals,
+    /// The relay/lan and relay/ws LAN allow-list: hosts (any port) or host:port.
+    #[command(subcommand)]
+    Lan(ListCmd),
+    /// Public wss:// hosts relay/ws may reach (host or host:port).
+    #[command(subcommand)]
+    Ws(ListCmd),
+    /// The TCP relay's allow-list (host:port).
+    #[command(subcommand)]
+    Tcp(ListCmd),
+    /// S3-compatible profiles for relay/s3 (credentials: `gw companion secret set s3:<name>`).
+    #[command(subcommand)]
+    S3(S3Cmd),
     /// Paired origins and tools (token ids, never tokens).
     Tokens,
     /// Revoke a token by id, or every token of an origin.
@@ -29,17 +44,53 @@ pub enum CompanionCmd {
     /// Change a setting: gw companion set tcp_allow '["127.0.0.1:5432","pi.local:30005"]',
     /// gw companion set receiver http://piaware.local:8080, gw companion set relays.git false
     Set { key: String, value: String },
-    /// Supplier API secrets in the keychain (digikey, mouser, nexar).
+    /// Secrets in the keychain (digikey, mouser, nexar, s3:<profile>).
     #[command(subcommand)]
     Secret(SecretCmd),
+}
+
+#[derive(Subcommand)]
+pub enum ListCmd {
+    /// The entries.
+    List,
+    /// Add an entry.
+    Add { entry: String },
+    /// Remove an entry.
+    Remove { entry: String },
+    /// Approve a waiting first-use request for this host (or target), or by its code.
+    Approve { which: String },
+}
+
+#[derive(Subcommand)]
+pub enum S3Cmd {
+    /// The profiles (and whether their credentials are set).
+    List,
+    /// Add or replace a profile: gw companion s3 add minio --endpoint http://nas.local:9000 --region us-east-1 --path-style
+    Add {
+        name: String,
+        #[arg(long)]
+        endpoint: String,
+        #[arg(long, default_value = "us-east-1")]
+        region: String,
+        /// endpoint/bucket/key (MinIO and most self-hosted stores) instead of bucket.endpoint/key.
+        #[arg(long)]
+        path_style: bool,
+        /// Accept a self-signed certificate (LAN endpoints only).
+        #[arg(long)]
+        insecure: bool,
+    },
+    /// Remove a profile (and its stored credentials).
+    Remove { name: String },
 }
 
 #[derive(Subcommand)]
 pub enum SecretCmd {
     /// Which secrets are present (never their values).
     List,
-    /// Store secrets: `digikey` (asks for client id and secret), `mouser`, `nexar`, or one field
-    /// name (digikey_client_id, …) with --value. Values are read from stdin when not given.
+    /// Store secrets: `digikey` (asks for client id and secret), `mouser`, `nexar`,
+    /// `s3:<profile>` (asks for the access key id and secret access key), or one field name
+    /// (digikey_client_id, s3:<profile>:secret_access_key, …) with --value. Values are read
+    /// from stdin when not given.
     Set {
         name: String,
         #[arg(long)]
@@ -103,6 +154,83 @@ fn patch_for(key: &str, value: &str) -> Value {
     }
 }
 
+/// Change the settings: through the running app (so the gateway sees it at once), else in
+/// companion.toml (and the audit log) directly.
+fn change(f: impl FnOnce(&mut Settings) -> Result<Vec<&'static str>>) -> Result<Value> {
+    match appclient::find_port() {
+        Some(_) => {
+            let cur: Settings = serde_json::from_value(appclient::get("/api/companion")?["settings"].clone()).context("reading the app's companion settings")?;
+            let mut new = cur.clone();
+            let keys = f(&mut new)?;
+            let v = serde_json::to_value(&new)?;
+            let patch: serde_json::Map<String, Value> = keys.iter().map(|k| (k.to_string(), v[*k].clone())).collect();
+            appclient::send("PUT", "/api/companion/settings", &Value::Object(patch))
+        }
+        None => {
+            let mut s = Settings::load()?;
+            let keys = f(&mut s)?;
+            s.validate()?;
+            s.save()?;
+            crate::companion::audit_append(json!({"event": "settings", "keys": keys, "by": "cli"}));
+            Ok(json!({ "settings": s }))
+        }
+    }
+}
+
+fn list_field<'a>(s: &'a mut Settings, which: &str) -> &'a mut Vec<String> {
+    match which {
+        "lan_hosts" => &mut s.lan_hosts,
+        "ws_allow" => &mut s.ws_allow,
+        _ => &mut s.tcp_allow,
+    }
+}
+
+fn run_list(key: &'static str, kind: &str, c: ListCmd) -> Result<Value> {
+    match c {
+        ListCmd::List => {
+            let s = match appclient::get("/api/companion") {
+                Ok(v) => serde_json::from_value(v["settings"].clone())?,
+                Err(_) => Settings::load()?,
+            };
+            Ok(json!(list_field(&mut s.clone(), key).clone()))
+        }
+        ListCmd::Add { entry } => change(|s| {
+            let e = entry.trim().to_ascii_lowercase();
+            let l = list_field(s, key);
+            if !l.iter().any(|x| x.eq_ignore_ascii_case(&e)) {
+                l.push(e);
+            }
+            Ok(vec![key])
+        }),
+        ListCmd::Remove { entry } => change(|s| {
+            let l = list_field(s, key);
+            let before = l.len();
+            l.retain(|x| !x.eq_ignore_ascii_case(entry.trim()));
+            if l.len() == before {
+                bail!("{entry:?} is not on {key}");
+            }
+            Ok(vec![key])
+        }),
+        ListCmd::Approve { which } => {
+            if kind.is_empty() {
+                bail!("public wss:// hosts are never prompted for: use `gw companion ws add <host>`");
+            }
+            appclient::send("POST", &format!("/api/companion/approvals/{}?kind={kind}", urlencoding::encode(&which)), &json!({ "allow": true }))
+        }
+    }
+}
+
+/// Approve or deny by code: a pairing request, else a first-use approval.
+fn decide(code: &str, allow: bool) -> Result<Value> {
+    match appclient::send("POST", &format!("/api/companion/pair/{code}"), &json!({ "allow": allow })) {
+        Ok(v) => Ok(v),
+        Err(e) if format!("{e:#}").contains("no pending pairing") => {
+            appclient::send("POST", &format!("/api/companion/approvals/{}", urlencoding::encode(code)), &json!({ "allow": allow }))
+        }
+        Err(e) => Err(e),
+    }
+}
+
 pub fn run_companion(c: CompanionCmd) -> Result<Value> {
     Ok(match c {
         CompanionCmd::Status => match appclient::get("/api/companion") {
@@ -111,8 +239,45 @@ pub fn run_companion(c: CompanionCmd) -> Result<Value> {
                 "settings": Settings::load()?, "secrets": secrets::Store::user().presence() }),
         },
         CompanionCmd::Pending => appclient::get("/api/companion")?["pending"].clone(),
-        CompanionCmd::Approve { code } => appclient::send("POST", &format!("/api/companion/pair/{code}"), &json!({ "allow": true }))?,
-        CompanionCmd::Deny { code } => appclient::send("POST", &format!("/api/companion/pair/{code}"), &json!({ "allow": false }))?,
+        CompanionCmd::Approve { code } => decide(&code, true)?,
+        CompanionCmd::Deny { code } => decide(&code, false)?,
+        CompanionCmd::Approvals => appclient::get("/api/companion")?["approvals"].clone(),
+        CompanionCmd::Lan(c) => run_list("lan_hosts", "lan", c)?,
+        CompanionCmd::Ws(c) => run_list("ws_allow", "", c)?,
+        CompanionCmd::Tcp(c) => run_list("tcp_allow", "tcp", c)?,
+        CompanionCmd::S3(c) => match c {
+            S3Cmd::List => match appclient::get("/api/companion") {
+                Ok(v) => v["s3"].clone(),
+                Err(_) => {
+                    let store = secrets::Store::user();
+                    Value::Array(Settings::load()?.s3_profiles.iter().map(|(n, p)| json!({"name": n, "endpoint": p.endpoint, "region": p.region,
+                        "path_style": p.path_style, "insecure": p.insecure, "credentials": store.holds(&format!("s3:{n}"))})).collect())
+                }
+            },
+            S3Cmd::Add { name, endpoint, region, path_style, insecure } => {
+                let mut v = change(|s| {
+                    s.s3_profiles.insert(name.clone(), crate::companion::settings::S3Profile { endpoint: endpoint.trim_end_matches('/').to_string(), region, path_style, insecure });
+                    Ok(vec!["s3_profiles"])
+                })?;
+                if !secrets::Store::user().holds(&format!("s3:{name}")) {
+                    v["next"] = json!(format!("store the credentials: gw companion secret set s3:{name}"));
+                }
+                v
+            }
+            S3Cmd::Remove { name } => {
+                let v = change(|s| {
+                    if s.s3_profiles.remove(&name).is_none() {
+                        bail!("no S3 profile {name:?}");
+                    }
+                    Ok(vec!["s3_profiles"])
+                })?;
+                let store = secrets::Store::user();
+                for f in secrets::fields(&format!("s3:{name}")).unwrap_or_default() {
+                    let _ = store.delete(&f);
+                }
+                v
+            }
+        },
         CompanionCmd::Tokens => match appclient::get("/api/companion") {
             Ok(v) => v["paired"].clone(),
             Err(_) => {
@@ -152,14 +317,11 @@ pub fn run_companion(c: CompanionCmd) -> Result<Value> {
             match s {
                 SecretCmd::List => store.presence(),
                 SecretCmd::Set { name, value } => {
-                    let fields: Vec<&str> = match secrets::fields(&name) {
-                        Some(f) => f.to_vec(),
-                        None => vec![name.as_str()],
-                    };
+                    let fields: Vec<String> = secrets::fields(&name).unwrap_or_else(|| vec![name.clone()]);
                     if value.is_some() && fields.len() > 1 {
                         bail!("{name} has {} fields; set them one at a time ({}) with --value, or omit --value to be asked", fields.len(), fields.join(", "));
                     }
-                    for f in fields {
+                    for f in &fields {
                         let v = match &value {
                             Some(v) => v.clone(),
                             None => read_line(f)?,
@@ -169,18 +331,25 @@ pub fn run_companion(c: CompanionCmd) -> Result<Value> {
                         }
                         store.set(f, &v)?;
                     }
+                    secret_audit(&fields, "set");
                     store.presence()
                 }
                 SecretCmd::Delete { name } => {
-                    let fields: Vec<&str> = secrets::fields(&name).map(|f| f.to_vec()).unwrap_or_else(|| vec![name.as_str()]);
-                    for f in fields {
+                    let fields: Vec<String> = secrets::fields(&name).unwrap_or_else(|| vec![name.clone()]);
+                    for f in &fields {
                         store.delete(f)?;
                     }
+                    secret_audit(&fields, "deleted");
                     store.presence()
                 }
             }
         }
     })
+}
+
+/// Secret changes are audit-logged (names only, never values).
+fn secret_audit(names: &[String], action: &str) {
+    crate::companion::audit_append(json!({"event": "secret", "names": names, "action": action, "by": "cli"}));
 }
 
 /// Parse `-p name=value` pairs.

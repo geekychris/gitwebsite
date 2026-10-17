@@ -1697,12 +1697,18 @@ async function viewCompanion() {
   const audit = st.running ? await get('/companion/audit?n=100').catch(() => ({ entries: [] })) : { entries: [] };
   main.innerHTML = `
     <h1>Companion</h1>
-    <p class="sub">A local gateway the site's tools use for what a browser can't do alone — feeds without CORS, TCP (Postgres, Redis, Mode S), Docker, Kubernetes, git clone.
+    <p class="sub">A local gateway the site's tools use for what a browser can't do alone — feeds without CORS, TCP (Postgres, Redis, Mode S), Docker, Kubernetes, git clone, devices on your LAN (HTTP and WebSocket), S3 storage.
       ${st.running ? `Running on <span class="mono">${esc(st.url)}</span>.` : '<b>Not running</b> (disabled, or another copy holds the port).'}
       Tool windows: ${st.view === 'window' ? 'native windows' : 'the default browser'}. Settings: <span class="mono">${esc(st.settings_file || '')}</span></p>
     ${(st.pending || []).length ? `<div class="panel"><h2>Waiting for approval</h2>${st.pending.map(p => `
       <div class="row-item"><b>${esc(p.tool || 'a page')}</b> at <span class="mono">${esc(p.origin || '(no origin)')}</span> wants ${esc(p.scopes.join(', '))} — code <b class="mono">${esc(p.code)}</b>
         <button class="primary" data-allow="${esc(p.id)}">Allow</button> <button class="danger" data-deny="${esc(p.id)}">Deny</button></div>`).join('')}</div>` : ''}
+    ${(st.approvals || []).length ? `<div class="panel"><h2>Waiting for approval: first use</h2>${st.approvals.map(a => `
+      <div class="row-item"><b>${esc(a.tool || 'a page')}</b> at <span class="mono">${esc(a.origin || '(no origin)')}</span> wants
+        ${a.kind === 'lan' ? `the LAN device <b class="mono">${esc(a.target)}</b>` : a.kind === 'tcp' ? `TCP to <b class="mono">${esc(a.target)}</b>` : `to delete <b class="mono">s3://${esc(a.target)}</b>`}
+        <span class="small muted mono">${esc(a.detail)}</span> — code <b class="mono">${esc(a.code)}</b>
+        <button class="primary" data-approve="${esc(a.id)}">${a.kind === 's3-delete' ? 'Delete' : 'Allow'}</button> <button class="danger" data-disapprove="${esc(a.id)}">Deny</button></div>`).join('')}
+      <p class="small muted">Allowing a LAN device or TCP target adds it to its allow-list below.</p></div>` : ''}
     <p class="small muted">Chrome asks before an https page may reach this computer's 127.0.0.1 (Local Network Access): when a tool on the site first connects, allow “access other apps and services on this device” in Chrome's prompt, or the tool will report that the app isn't running.</p>
     <div class="panel"><h2>Paired</h2>
       ${(st.paired || []).length ? `<table><tr><th>Origin</th><th>Tool</th><th>Scopes</th><th>Last used</th><th></th></tr>${st.paired.map(t => `
@@ -1710,8 +1716,10 @@ async function viewCompanion() {
         <td><button class="danger" data-revoke="${esc(t.id)}">Revoke</button></td></tr>`).join('')}</table>` : '<p class="muted">Nothing paired yet. Pages from this app\'s preview pair automatically; others ask here and in a dialog.</p>'}
     </div>
     <div class="panel"><h2>Relays</h2>
-      <div class="bar">${['http', 'tcp', 'docker', 'kube', 'git'].map(r => `<label class="inline"><input type="checkbox" data-relay="${r}" ${relays[r] ? 'checked' : ''}> ${r}</label>`).join(' ')}</div>
-      <label>TCP allow-list (host:port, one per line) <textarea rows="3" data-set="tcp_allow">${esc(lines(s.tcp_allow))}</textarea></label>
+      <div class="bar">${['http', 'tcp', 'docker', 'kube', 'git', 'lan', 'ws', 's3'].map(r => `<label class="inline"><input type="checkbox" data-relay="${r}" ${relays[r] ? 'checked' : ''}> ${r}</label>`).join(' ')}</div>
+      <label>TCP allow-list (host:port, one per line; a paired page's first connection to a new LAN target asks you) <textarea rows="3" data-set="tcp_allow">${esc(lines(s.tcp_allow))}</textarea></label>
+      <label>LAN hosts for relay/lan and LAN WebSockets (host = any port, or host:port; IPs, names, .local — LAN addresses only; a paired page's first request to a new one asks you) <textarea rows="3" data-set="lan_hosts" placeholder="homeassistant.local&#10;192.168.1.20:8123">${esc(lines(s.lan_hosts))}</textarea></label>
+      <label>Public wss:// hosts for relay/ws (host or host:port; never asked for, only added here) <textarea rows="2" data-set="ws_allow" placeholder="mqtt.meshtastic.org">${esc(lines(s.ws_allow))}</textarea></label>
       <label>Extra page origins allowed (one per line; the site and http://127.0.0.1:* / localhost:* always are) <textarea rows="2" data-set="extra_origins">${esc(lines(s.extra_origins))}</textarea></label>
       <label>ADS-B receiver (relay/http/receiver) <input data-set="receiver" value="${esc(s.receiver)}" placeholder="http://piaware.local:8080"></label>
       <label>Kafka REST proxy (relay/http/kafka-rest) <input data-set="kafka_rest" value="${esc(s.kafka_rest)}" placeholder="http://localhost:8082"></label>
@@ -1719,12 +1727,20 @@ async function viewCompanion() {
       <label>Redpanda Admin API (relay/http/redpanda-admin, GET only) <input data-set="redpanda_admin" value="${esc(s.redpanda_admin)}" placeholder="http://localhost:9644"></label>
       <label>Extra git hosts (one per line) <textarea rows="2" data-set="git_hosts">${esc(lines(s.git_hosts))}</textarea></label>
       <label class="inline"><input type="checkbox" data-flag="git_allow_push" ${s.git_allow_push ? 'checked' : ''}> Allow git push through the relay</label>
+      <label class="inline"><input type="checkbox" data-flag="s3_confirm_delete" ${s.s3_confirm_delete !== false ? 'checked' : ''}> Ask before each S3 delete</label>
       <label>Docker socket (empty: auto-detect) <input data-set="docker_host" value="${esc(s.docker_host)}" placeholder="unix:///Users/you/.rd/docker.sock"></label>
       <label>kubeconfig (empty: $KUBECONFIG or ~/.kube/config; read, never written) <input data-set="kubeconfig" value="${esc(s.kubeconfig)}"></label>
       <button class="primary" data-save>Save settings</button>
       <p class="small muted">Docker: ${st.docker ? `<span class="mono">${esc(st.docker)}</span>` : 'no socket found'}.
         Kubernetes: ${kube.ok ? `${(kube.contexts || []).length} context(s) — ${(kube.contexts || []).map(c => esc(c.name)).join(', ')}` : esc(kube.error || 'none')}.
         HTTP upstreams: ${esc((st.upstreams || []).join(', '))}.</p>
+    </div>
+    <div class="panel"><h2>S3 profiles</h2>
+      <p class="small muted">S3-compatible storage for <span class="mono">relay/s3/&lt;profile&gt;/…</span> (AWS, MinIO, R2, …). The companion signs each request; the access key and secret are kept with the other secrets and never shown or sent to a page.</p>
+      ${(st.s3 || []).length ? `<table><tr><th>Profile</th><th>Endpoint</th><th>Region</th><th>Style</th><th>Credentials</th><th></th></tr>${st.s3.map(p => `
+        <tr><td class="mono">${esc(p.name)}</td><td class="mono small">${esc(p.endpoint)}</td><td>${esc(p.region)}</td><td>${p.path_style ? 'path' : 'virtual-host'}${p.insecure ? ', self-signed OK' : ''}</td><td>${yes(p.credentials)}</td>
+        <td><button data-s3cred="${esc(p.name)}">Set credentials…</button> <button class="danger" data-s3rm="${esc(p.name)}">Remove</button></td></tr>`).join('')}</table>` : '<p class="muted">No profiles.</p>'}
+      <button data-s3add>Add profile…</button>
     </div>
     <div class="panel"><h2>Supplier API secrets</h2>
       <p class="small muted">${String(st.secrets_store || '').startsWith('file:') ? `Kept in <span class="mono">${esc(String(st.secrets_store).slice(5))}</span> (a non-default config directory never uses the Keychain)` : 'Kept in the macOS Keychain'} and added to parts-supplier requests by the companion; pages never see them. Values are never shown.</p>
@@ -1733,12 +1749,45 @@ async function viewCompanion() {
     </div>
     <div class="panel"><h2>Audit log</h2>
       ${audit.entries.length ? `<table><tr><th>When</th><th>Origin</th><th>Tool</th><th>Request</th><th>Status</th></tr>${audit.entries.map(e => `
-        <tr><td class="small">${esc(e.at)}</td><td class="mono small">${esc(e.origin || '—')}</td><td>${esc(e.tool || '')}</td><td class="mono small">${esc(e.method)} ${esc(e.path)}${e.note ? ` <span class="muted">(${esc(e.note)})</span>` : ''}</td><td>${esc(e.status)}${e.close ? ` → close ${esc(e.close)}` : ''}</td></tr>`).join('')}</table>` : '<p class="muted">No requests yet.</p>'}
+        <tr><td class="small">${esc(e.at)}</td><td class="mono small">${esc(e.origin || '—')}</td><td>${esc(e.tool || '')}</td><td class="mono small">${e.event ? auditEvent(e) : `${esc(e.method)} ${esc(e.path)}`}${e.note ? ` <span class="muted">(${esc(e.note)})</span>` : ''}</td><td>${e.event ? esc(e.decision || e.action || '') : esc(e.status)}${e.close ? ` → close ${esc(e.close)}` : ''}</td></tr>`).join('')}</table>` : '<p class="muted">No requests yet.</p>'}
     </div>`;
   const refresh = () => viewCompanion();
   $$('[data-allow]').forEach(b => b.onclick = () => guard(async () => { await api('POST', '/companion/pair/' + b.dataset.allow, { allow: true }); toast('Allowed'); refresh(); }));
   $$('[data-deny]').forEach(b => b.onclick = () => guard(async () => { await api('POST', '/companion/pair/' + b.dataset.deny, { allow: false }); toast('Denied'); refresh(); }));
   $$('[data-revoke]').forEach(b => b.onclick = () => guard(async () => { await api('DELETE', '/companion/tokens/' + encodeURIComponent(b.dataset.revoke)); toast('Revoked'); refresh(); }));
+  $$('[data-approve]').forEach(b => b.onclick = () => guard(async () => { await api('POST', '/companion/approvals/' + b.dataset.approve, { allow: true }); toast('Allowed'); refresh(); }));
+  $$('[data-disapprove]').forEach(b => b.onclick = () => guard(async () => { await api('POST', '/companion/approvals/' + b.dataset.disapprove, { allow: false }); toast('Denied'); refresh(); }));
+  const s3creds = async name => {
+    const v = await form('Credentials for S3 profile ' + name, [
+      { type: 'note', text: 'Write-only: stored with the companion secrets, never shown again or sent to a page. Leave a field empty to keep it.' },
+      { name: 'access_key_id', label: 'Access key id' }, { name: 'secret_access_key', label: 'Secret access key', type: 'password' }], 'Save');
+    if (!v) return false;
+    for (const f of ['access_key_id', 'secret_access_key']) if (v[f]) await api('PUT', '/companion/secrets/' + encodeURIComponent(`s3:${name}:${f}`), { value: v[f] });
+    return true;
+  };
+  $$('[data-s3cred]').forEach(b => b.onclick = () => guard(async () => { if (await s3creds(b.dataset.s3cred)) { toast('Saved'); refresh(); } }));
+  $$('[data-s3rm]').forEach(b => b.onclick = () => guard(async () => {
+    if (!confirm(`Remove the S3 profile ${b.dataset.s3rm} and its credentials?`)) return;
+    const profiles = { ...(s.s3_profiles || {}) };
+    delete profiles[b.dataset.s3rm];
+    await api('PUT', '/companion/settings', { s3_profiles: profiles });
+    for (const f of ['access_key_id', 'secret_access_key']) await api('DELETE', '/companion/secrets/' + encodeURIComponent(`s3:${b.dataset.s3rm}:${f}`)).catch(() => {});
+    toast('Removed'); refresh();
+  }));
+  $('[data-s3add]').onclick = () => guard(async () => {
+    const v = await form('Add an S3 profile', [
+      { name: 'name', label: 'Name (letters, digits, - and _)', required: true, placeholder: 'minio' },
+      { name: 'endpoint', label: 'Endpoint (scheme://host[:port])', required: true, placeholder: 'http://nas.local:9000 or https://s3.us-east-1.amazonaws.com' },
+      { name: 'region', label: 'Region', value: 'us-east-1', required: true },
+      { name: 'path_style', type: 'checkbox', label: 'Path-style URLs (MinIO and most self-hosted stores)', value: true },
+      { name: 'insecure', type: 'checkbox', label: 'Accept a self-signed certificate (LAN endpoints only)' },
+      { name: 'access_key_id', label: 'Access key id' }, { name: 'secret_access_key', label: 'Secret access key (write-only)', type: 'password' }], 'Add');
+    if (!v) return;
+    const profiles = { ...(s.s3_profiles || {}), [v.name.trim()]: { endpoint: v.endpoint.trim().replace(/\/+$/, ''), region: v.region.trim(), path_style: v.path_style, insecure: v.insecure } };
+    await api('PUT', '/companion/settings', { s3_profiles: profiles });
+    for (const f of ['access_key_id', 'secret_access_key']) if (v[f]) await api('PUT', '/companion/secrets/' + encodeURIComponent(`s3:${v.name.trim()}:${f}`), { value: v[f] });
+    toast('Added'); refresh();
+  });
   $$('[data-unsecret]').forEach(b => b.onclick = () => guard(async () => { await api('DELETE', '/companion/secrets/' + b.dataset.unsecret); toast('Removed'); refresh(); }));
   $$('[data-secret]').forEach(b => b.onclick = async () => {
     const v = await form('Set ' + b.dataset.secret, [{ name: 'value', label: 'Value (stored in the Keychain; not shown again)', required: true }], 'Save');
@@ -1767,6 +1816,14 @@ async function viewCompanion() {
     toast((r.restart_needed ? 'Saved — restart the app for the port change' : 'Saved') + (warn.length ? '. Note: ' + warn.join('; ') : ''));
     refresh();
   });
+}
+
+/** An audit-log event (approval decided, settings or secret changed) as one line. */
+function auditEvent(e) {
+  if (e.event === 'approval') return `approval ${esc(e.kind)} <b>${esc(e.target)}</b> by ${esc(e.by || '')}`;
+  if (e.event === 'settings') return `settings changed: ${esc((e.keys || []).join(', '))} (${esc(e.by || '')})`;
+  if (e.event === 'secret') return `secret ${esc((e.names || []).join(', '))} (${esc(e.by || '')})`;
+  return esc(e.event);
 }
 
 const routes = { companion: viewCompanion, content: viewContent, stories: viewStories, ideas: viewIdeas, registry: viewRegistry, media: viewMedia, publish: viewPublish, preview: viewPreview, sites: viewSites };
