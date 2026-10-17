@@ -60,6 +60,111 @@ fn get(auth: &Auth, path: &str) -> Result<Value> {
     Ok(v.get("Response").cloned().unwrap_or(v))
 }
 
+/// Signed POST of a JSON body to an API path, returning `Response`. With a JSON body the OAuth
+/// signature covers no body parameters.
+fn post_json(auth: &Auth, path: &str, body: &Value) -> Result<Value> {
+    let url = format!("{API}{path}");
+    let h = oauth1::header("POST", &url, &auth.creds(), &[], &[]);
+    let r = client()?
+        .post(&url)
+        .header("Authorization", h)
+        .header("Accept", "application/json")
+        .header("Content-Type", "application/json")
+        .body(body.to_string())
+        .send()?;
+    let status = r.status();
+    let v: Value = r.json().with_context(|| format!("{url}: not JSON (HTTP {status})"))?;
+    if !status.is_success() {
+        bail!("{url}: HTTP {status}: {}", v.get("Message").and_then(|m| m.as_str()).unwrap_or(""));
+    }
+    Ok(v.get("Response").cloned().unwrap_or(v))
+}
+
+/// SmugMug URL names: start with a capital letter, letters, digits and hyphens only.
+fn url_name(name: &str) -> String {
+    let mut out: String = name
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(|w| { let mut c = w.chars(); c.next().map(|f| f.to_ascii_uppercase().to_string() + c.as_str()).unwrap_or_default() })
+        .collect::<Vec<_>>()
+        .join("-");
+    if !out.chars().next().map(|c| c.is_ascii_uppercase()).unwrap_or(false) {
+        out = format!("A-{out}");
+    }
+    out.chars().take(60).collect()
+}
+
+/// The album settings for a privacy level. Unlisted: viewable by link, hidden from your pages and
+/// from SmugMug and web search.
+fn album_settings(privacy: &str) -> Result<Value> {
+    Ok(match privacy {
+        "unlisted" => json!({ "Privacy": "Unlisted", "SmugSearchable": "No", "WorldSearchable": false }),
+        "public" => json!({ "Privacy": "Public", "SmugSearchable": "Inherit from User", "WorldSearchable": true }),
+        "private" => json!({ "Privacy": "Private", "SmugSearchable": "No", "WorldSearchable": false }),
+        other => bail!("--privacy must be unlisted, public or private (got {other})"),
+    })
+}
+
+fn create_album(site: &Site, auth: &Auth, name: &str, url: Option<&str>, privacy: &str, default: bool) -> Result<Value> {
+    let nick = nickname(auth)?;
+    let mut body = album_settings(privacy)?;
+    body["Name"] = json!(name);
+    body["UrlName"] = json!(url.map(|u| u.to_string()).unwrap_or_else(|| url_name(name)));
+    let r = post_json(auth, &format!("/api/v2/folder/user/{nick}!albums"), &body)?;
+    let a = r.get("Album").context("no Album in the response")?;
+    let key = a.get("AlbumKey").and_then(|x| x.as_str()).context("no AlbumKey in the response")?.to_string();
+    if default {
+        set_default_album(site, &key)?;
+    }
+    Ok(json!({ "album_key": key, "name": name, "privacy": a.get("Privacy"), "web": a.get("WebUri"), "default": default }))
+}
+
+/// The site's media album, from `smugmug: { album: KEY }` in site.yaml.
+fn default_album(site: &Site) -> Option<String> {
+    let text = std::fs::read_to_string(site.root.join("site.yaml")).ok()?;
+    let y: serde_yaml::Value = serde_yaml::from_str(&text).ok()?;
+    y.get("smugmug")?.get("album")?.as_str().map(|s| s.to_string())
+}
+
+/// The site's media album for the app: its key and web address (`{}` when none is set). Looks
+/// the album up on SmugMug when authorised; otherwise returns just the key.
+pub fn site_album(site: &Site) -> Result<Value> {
+    let Some(key) = default_album(site) else { return Ok(json!({})) };
+    let web = Auth::load().ok().and_then(|a| get(&a, &format!("/api/v2/album/{key}")).ok())
+        .and_then(|r| r.pointer("/Album/WebUri").and_then(|x| x.as_str()).map(|s| s.to_string()));
+    Ok(json!({ "album_key": key, "web": web }))
+}
+
+/// Write `smugmug: { album: KEY }` into site.yaml, replacing an existing block, keeping the rest
+/// of the file (and its comments) as it is.
+fn set_default_album(site: &Site, key: &str) -> Result<()> {
+    let path = site.root.join("site.yaml");
+    let text = std::fs::read_to_string(&path)?;
+    let line = format!("smugmug: {{ album: {key} }}");
+    let mut out = vec![];
+    let mut lines = text.lines().peekable();
+    let mut done = false;
+    while let Some(l) = lines.next() {
+        if l.starts_with("smugmug:") {
+            // drop the old block: the key line and any indented lines under it
+            while lines.peek().map(|n| n.starts_with(' ') || n.starts_with('\t')).unwrap_or(false) {
+                lines.next();
+            }
+            out.push(line.clone());
+            done = true;
+        } else {
+            out.push(l.to_string());
+        }
+    }
+    if !done {
+        out.push(String::new());
+        out.push("# SmugMug album that `gw smugmug upload` uses when no --album is given.".into());
+        out.push(line);
+    }
+    std::fs::write(&path, out.join("\n") + "\n")?;
+    Ok(())
+}
+
 fn form(s: &str) -> BTreeMap<String, String> {
     s.split('&')
         .filter_map(|p| p.split_once('='))
@@ -485,8 +590,13 @@ pub fn run(site: &Site, cmd: SmugmugCmd) -> Result<Value> {
         SmugmugCmd::Whoami => whoami(&Auth::load()?),
         SmugmugCmd::Get { path } => get(&Auth::load()?, &path),
         SmugmugCmd::Albums => albums(&Auth::load()?),
+        SmugmugCmd::CreateAlbum { name, url_name, privacy, default } => create_album(site, &Auth::load()?, &name, url_name.as_deref(), &privacy, default),
         SmugmugCmd::Upload { file, album, key, title, caption, alt } => {
             let auth = Auth::load()?;
+            let album = match album.or_else(|| default_album(site)) {
+                Some(a) => a,
+                None => bail!("no --album, and site.yaml has no SmugMug media album: run `gw smugmug create-album \"<name>\" --default` or pass --album"),
+            };
             upload(site, &auth, &file, &album, key, title, caption, alt)
         }
         SmugmugCmd::Import { image, key, alt, caption } => {
@@ -496,6 +606,23 @@ pub fn run(site: &Site, cmd: SmugmugCmd) -> Result<Value> {
             }
             let m = media_for(&auth, &image_key(&image), None, alt.as_deref(), caption.as_deref())?;
             register(site, &key, m)
+        }
+        SmugmugCmd::Refresh { key } => {
+            let auth = Auth::load()?;
+            let mut lib = site.media()?;
+            let old = lib.media.get(&key).with_context(|| format!("no media key {key}"))?.clone();
+            if old.provider != "smugmug" {
+                bail!("{key} is not SmugMug media (provider {})", old.provider);
+            }
+            let ik = old.ids.get("image_key").map(|s| s.to_string()).with_context(|| format!("{key} has no image_key"))?;
+            let ak = old.ids.get("album_key").map(|s| s.to_string());
+            let alt = (!old.alt.is_empty()).then(|| old.alt.clone());
+            let cap = (!old.caption.is_empty()).then(|| old.caption.clone());
+            let m = media_for(&auth, &ik, ak.as_deref(), alt.as_deref(), cap.as_deref())?;
+            let playable = !m.ids.contains_key("note");
+            lib.media.insert(key.clone(), m.clone());
+            lib.save(&site.media_path())?;
+            Ok(json!({ "key": key, "url": m.url, "playable": playable }))
         }
         SmugmugCmd::SyncAlbum { album, prefix } => {
             let auth = Auth::load()?;
@@ -556,5 +683,24 @@ mod tests {
         assert_eq!(image_key("AbC12dE"), "AbC12dE");
         assert_eq!(album_uri("ZbcdEf"), "/api/v2/album/ZbcdEf");
         assert_eq!(album_uri("/api/v2/album/ZbcdEf"), "/api/v2/album/ZbcdEf");
+    }
+}
+
+#[cfg(test)]
+mod album_tests {
+    use super::*;
+
+    #[test]
+    fn url_names_follow_smugmug_rules() {
+        assert_eq!(url_name("geekychris.github.io media"), "Geekychris-Github-Io-Media");
+        assert_eq!(url_name("2026 videos"), "A-2026-Videos");
+    }
+
+    #[test]
+    fn unlisted_albums_are_hidden_from_search() {
+        let s = album_settings("unlisted").unwrap();
+        assert_eq!(s["Privacy"], "Unlisted");
+        assert_eq!(s["WorldSearchable"], false);
+        assert!(album_settings("secret").is_err());
     }
 }

@@ -255,6 +255,28 @@ pub fn media_list(site: &Site) -> Result<Value> {
     Ok(json!(site.media()?.media))
 }
 
+/// Which content uses each media key: `{ key: [{ id, title, url, draft }] }`. A page uses a key
+/// when its source mentions `media:<key>` (image/video macros, :hero:).
+pub fn media_usage(site: &Site) -> Result<Value> {
+    let keys: Vec<String> = site.media()?.media.keys().cloned().collect();
+    let mut out = serde_json::Map::new();
+    for it in site.items()? {
+        let Ok(text) = std::fs::read_to_string(&it.path) else { continue };
+        for k in &keys {
+            let pat = format!("media:{k}");
+            let used = text.match_indices(&pat).any(|(i, _)| {
+                let next = text[i + pat.len()..].chars().next();
+                !matches!(next, Some(c) if c.is_ascii_alphanumeric() || "-_.".contains(c))
+            });
+            if used {
+                let e = out.entry(k.clone()).or_insert_with(|| json!([]));
+                e.as_array_mut().unwrap().push(json!({ "id": it.id, "title": it.title, "url": it.url, "draft": it.draft }));
+            }
+        }
+    }
+    Ok(Value::Object(out))
+}
+
 pub fn media_add(site: &Site, key: &str, m: Media) -> Result<Value> {
     let mut lib = site.media()?;
     if !key.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)) {

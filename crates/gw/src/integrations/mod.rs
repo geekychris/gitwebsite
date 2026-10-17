@@ -32,12 +32,29 @@ pub enum SmugmugCmd {
     Whoami,
     /// List your albums (name, AlbumKey, web address).
     Albums,
+    /// Create an album. Unlisted by default: anyone with the link can view it, but it is not
+    /// listed on your SmugMug pages or in SmugMug or Google search.
+    CreateAlbum {
+        /// Album name (e.g. "geekychris.github.io media").
+        name: String,
+        /// URL name (default: derived from the name).
+        #[arg(long)]
+        url_name: Option<String>,
+        /// unlisted | public | private
+        #[arg(long, default_value = "unlisted")]
+        privacy: String,
+        /// Make it the site's media album: written to site.yaml as `smugmug: { album: KEY }`, and
+        /// `gw smugmug upload` uses it when --album is not given.
+        #[arg(long)]
+        default: bool,
+    },
     /// Upload an image or video to an album and register it in the media library.
     Upload {
         file: PathBuf,
-        /// AlbumKey (e.g. "ZbcdEf") or an album URI (/api/v2/album/ZbcdEf).
+        /// AlbumKey (e.g. "ZbcdEf") or an album URI (/api/v2/album/ZbcdEf). Default: the site's
+        /// media album (`smugmug: { album: KEY }` in site.yaml, set by `create-album --default`).
         #[arg(long)]
-        album: String,
+        album: Option<String>,
         /// Media key to register it under (default: derived from the file name).
         #[arg(long)]
         key: Option<String>,
@@ -58,6 +75,12 @@ pub enum SmugmugCmd {
         alt: Option<String>,
         #[arg(long)]
         caption: Option<String>,
+    },
+    /// Look a registered SmugMug media item up again, e.g. once a video has finished processing
+    /// and has a playable URL. Keeps its alt text and caption.
+    Refresh {
+        /// The media key (as in `media:<key>`).
+        key: String,
     },
     /// Register every image in an album as <prefix>-1, <prefix>-2, ...
     SyncAlbum {

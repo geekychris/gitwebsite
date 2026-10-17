@@ -389,6 +389,18 @@ async fn media_add(State(st): State<AppState>, Json(b): Json<MediaBody>) -> ApiR
     with_site(&st, move |s| ops::media_add(s, &b.key, b.media)).await
 }
 
+async fn media_usage(State(st): State<AppState>) -> ApiResult {
+    with_site(&st, ops::media_usage).await
+}
+
+async fn media_refresh(State(st): State<AppState>, AxPath(key): AxPath<String>) -> ApiResult {
+    with_site(&st, move |s| crate::integrations::smugmug::run(s, crate::integrations::SmugmugCmd::Refresh { key })).await
+}
+
+async fn smugmug_album(State(st): State<AppState>) -> ApiResult {
+    with_site(&st, crate::integrations::smugmug::site_album).await
+}
+
 // ------------------------------------------------------------------ handlers: stories
 
 async fn stories_list(State(st): State<AppState>) -> ApiResult {
@@ -933,6 +945,9 @@ fn router_for(st: AppState) -> Router {
         .route("/api/registry", get(registry_list).post(registry_put))
         .route("/api/registry/{id}", axum::routing::delete(registry_delete))
         .route("/api/media", get(media_list).post(media_add))
+        .route("/api/media/usage", get(media_usage))
+        .route("/api/media/{key}/refresh", post(media_refresh))
+        .route("/api/smugmug/album", get(smugmug_album))
         .route("/api/stories", get(stories_list).post(stories_create))
         .route("/api/stories/{slug}", get(story_get).patch(story_patch).delete(story_delete))
         .route("/api/stories/{slug}/images", post(story_add))
