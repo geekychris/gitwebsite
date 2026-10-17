@@ -17,7 +17,9 @@ pub fn find_port() -> Option<u16> {
     }
     let file = std::fs::read_to_string(crate::server_companion::server_file()).ok();
     let from_file = file.and_then(|t| serde_json::from_str::<Value>(&t).ok()).and_then(|v| v["ui_port"].as_u64()).map(|p| p as u16);
-    from_file.into_iter().chain([8790]).find(|p| reachable(*p))
+    // A scratch config directory (GW_CONFIG_DIR) never falls back to 8790, the real app's port.
+    let fallback = gw_core::userconfig::is_default_config_dir().then_some(8790);
+    from_file.into_iter().chain(fallback).find(|p| reachable(*p))
 }
 
 pub fn base() -> Result<String> {

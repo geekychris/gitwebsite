@@ -202,7 +202,7 @@ fn tools() -> Value {
          "inputSchema": s(json!({"id": str_("Window id from tool_open or tool_windows")}), &["id"])},
         {"name": "tool_screenshot", "description": "A PNG of a tool window's page, to check what the user is seeing (the gitwebsite app on macOS only).",
          "inputSchema": s(json!({"id": str_("Window id")}), &["id"])},
-        {"name": "companion_status", "description": "The gitwebsite app and its companion gateway: running or not, its port, the relays (HTTP upstreams, TCP allow-list, Docker socket, Kubernetes contexts, git hosts), paired tools, pending pairing requests, which supplier secrets are present (never values).",
+        {"name": "companion_status", "description": "The gitwebsite app and its companion gateway: running or not, its port, the relays (HTTP upstreams, TCP allow-list, Docker socket, Kubernetes contexts, git hosts, LAN hosts, wss allow-list, S3 profiles), paired tools, pending pairing requests and first-use approvals, which secrets are present (never values).",
          "inputSchema": s(json!({}), &[])},
         {"name": "add_media", "description": "Register an image or video URL (or site path like /images/x.jpg) under a key, for use as image::media:<key>[] or video::media:<key>[].",
          "inputSchema": s(json!({"key": str_("Letters, digits, - _ ."), "url": str_("Absolute URL or site path"),

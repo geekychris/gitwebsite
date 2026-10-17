@@ -87,6 +87,9 @@ fn ask_pairing(app: &AppHandle, req: gw::companion::pairing::PairRequest) {
         "relay.docker" => "read Docker (containers, images — read only)",
         "relay.kube" => "read your Kubernetes clusters (read only)",
         "relay.git" => "clone and fetch git repositories",
+        "relay.lan" => "reach devices on your local network (each new device asks first)",
+        "relay.ws" => "open WebSockets to your devices (and wss hosts you add)",
+        "relay.s3" => "read and write your S3 storage profiles (deletes ask first)",
         "view" => "open tool windows in the app",
         _ => "",
     };
@@ -105,6 +108,31 @@ fn ask_pairing(app: &AppHandle, req: gw::companion::pairing::PairRequest) {
         .show(move |allow| {
             if let Some(g) = gw::companion::global() {
                 let _ = g.pairing.decide(&id, allow, &g.tokens);
+            }
+        });
+}
+
+/// Ask the user about a first-use approval: a paired page wants a new LAN host or TCP target,
+/// or to delete an S3 object.
+fn ask_approval(app: &AppHandle, req: gw::companion::approvals::ApprovalRequest) {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+    let who = if req.origin.is_empty() { "a program on this Mac (no web origin)".to_string() } else { req.origin.clone() };
+    let tool = if req.tool.is_empty() { "(not named)".to_string() } else { req.tool.clone() };
+    let (title, what, after) = match req.kind.as_str() {
+        "lan" => (format!("Let {tool} reach {}?", req.target), format!("reach the device {} on your local network", req.target), "Allowing adds it to the LAN allow-list (Companion settings) for every paired page."),
+        "tcp" => (format!("Let {tool} connect to {}?", req.target), format!("open TCP connections to {}", req.target), "Allowing adds it to the TCP allow-list (Companion settings)."),
+        _ => (format!("Delete s3://{}?", req.target), format!("delete the object s3://{}", req.target), "This deletes only this object."),
+    };
+    let msg = format!("Tool:   {tool}\nPage:   {who}\n\nwants to {what}.\n\n{}\n\nCode {}. {after}", req.detail, req.code);
+    let id = req.id.clone();
+    app.dialog()
+        .message(msg)
+        .title(&title)
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(if req.kind == "s3-delete" { "Delete".into() } else { "Allow".into() }, "Deny".into()))
+        .show(move |allow| {
+            if let Some(g) = gw::companion::global() {
+                let _ = g.decide_approval(&id, allow, "app");
             }
         });
 }
@@ -189,6 +217,11 @@ fn main() {
                             g.set_pair_hook(move |req| {
                                 let h2 = h.clone();
                                 let _ = h.run_on_main_thread(move || ask_pairing(&h2, req));
+                            });
+                            let h = handle.clone();
+                            g.set_approval_hook(move |req| {
+                                let h2 = h.clone();
+                                let _ = h.run_on_main_thread(move || ask_approval(&h2, req));
                             });
                             return;
                         }

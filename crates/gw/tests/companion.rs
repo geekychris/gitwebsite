@@ -73,7 +73,7 @@ async fn hello_origin_host_and_preflight() {
     assert_eq!(r.headers()["access-control-allow-origin"], SITE);
     let v: Value = r.json().await.unwrap();
     assert_eq!(v["name"], "gitwebsite-companion");
-    assert_eq!(v["version"], "1");
+    assert_eq!(v["version"], "1.2");
     assert_eq!(v["paired"], false);
     assert!(v["capabilities"].as_array().unwrap().contains(&json!("relay.tcp")));
 
@@ -271,7 +271,7 @@ async fn tcp_relay_allow_list() {
     let (_ws2, resp) = connect(format!("127.0.0.1:{echo_port}"), format!("gw-companion.v1, bearer.{t}")).await.unwrap();
     assert_eq!(resp.headers()["sec-websocket-protocol"], "gw-companion.v1");
     // Not on the allow-list.
-    let e = connect("127.0.0.1:22".into(), format!("bearer.{t}")).await.unwrap_err();
+    let e = connect("8.8.8.8:22".into(), format!("bearer.{t}")).await.unwrap_err();
     assert!(e.to_string().contains("403"), "{e}");
     // Tokens in the URL are not accepted.
     let e = connect(format!("127.0.0.1:{echo_port}&token={t}"), "x".into()).await.unwrap_err();
@@ -292,7 +292,7 @@ async fn tcp_relay_allow_list() {
         }
     };
     let codes = |extra: &str| format!("gw-companion.v1, gw-companion.codes{extra}");
-    let (code, why) = refused("127.0.0.1:22".into(), codes(&format!(", bearer.{t}"))).await;
+    let (code, why) = refused("8.8.8.8:22".into(), codes(&format!(", bearer.{t}"))).await;
     assert_eq!(code, 4403);
     assert!(why.contains("allow-list"), "{why}");
     let (code, _) = refused(format!("127.0.0.1:{echo_port}"), codes(", bearer.nope")).await;

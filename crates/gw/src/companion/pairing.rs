@@ -14,7 +14,10 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
-pub const SCOPES: &[&str] = &["relay.http", "relay.tcp", "relay.docker", "relay.kube", "relay.git", "view"];
+pub const SCOPES: &[&str] = &["relay.http", "relay.tcp", "relay.docker", "relay.kube", "relay.git", "relay.lan", "relay.ws", "relay.s3", "view"];
+/// What an empty scope list means: the v1 relays. The v1.2 relays (`relay.lan`, `relay.ws`,
+/// `relay.s3`) reach the user's network and storage, so a page must ask for them by name.
+pub const DEFAULT_SCOPES: &[&str] = &["relay.http", "relay.tcp", "relay.docker", "relay.kube", "relay.git"];
 pub const PAIR_TTL: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -44,7 +47,7 @@ fn new_token() -> String {
     hex::encode(b)
 }
 
-/// Normalise requested scopes: known ones only, deduplicated; empty means all relays (not view).
+/// Normalise requested scopes: known ones only, deduplicated; empty means [`DEFAULT_SCOPES`].
 pub fn clean_scopes(asked: &[String]) -> Result<Vec<String>> {
     let mut out: Vec<String> = vec![];
     for s in asked {
@@ -56,7 +59,7 @@ pub fn clean_scopes(asked: &[String]) -> Result<Vec<String>> {
         }
     }
     if out.is_empty() {
-        out = SCOPES.iter().filter(|s| s.starts_with("relay.")).map(|s| s.to_string()).collect();
+        out = DEFAULT_SCOPES.iter().map(|s| s.to_string()).collect();
     }
     Ok(out)
 }

@@ -25,21 +25,35 @@ pub const NAMES: &[(&str, &str)] = &[
     ("nexar_client_secret", "NEXAR_CLIENT_SECRET"),
 ];
 
-/// The fields a supplier needs.
-pub fn fields(supplier: &str) -> Option<&'static [&'static str]> {
-    Some(match supplier {
+/// The two fields of an S3 profile's credentials.
+pub const S3_FIELDS: &[&str] = &["access_key_id", "secret_access_key"];
+
+/// The fields a supplier (or `s3:<profile>`) needs.
+pub fn fields(supplier: &str) -> Option<Vec<String>> {
+    let f: &[&str] = match supplier {
         "digikey" => &["digikey_client_id", "digikey_client_secret"],
         "mouser" => &["mouser_api_key"],
         "nexar" => &["nexar_client_id", "nexar_client_secret"],
-        _ => return None,
-    })
+        _ => {
+            let p = supplier.strip_prefix("s3:").filter(|p| super::settings::s3_name_ok(p))?;
+            return Some(S3_FIELDS.iter().map(|f| format!("s3:{p}:{f}")).collect());
+        }
+    };
+    Some(f.iter().map(|s| s.to_string()).collect())
+}
+
+/// `s3:<profile>:access_key_id` / `s3:<profile>:secret_access_key`.
+fn s3_field(name: &str) -> bool {
+    name.strip_prefix("s3:")
+        .and_then(|r| r.rsplit_once(':'))
+        .is_some_and(|(p, f)| super::settings::s3_name_ok(p) && S3_FIELDS.contains(&f))
 }
 
 fn check(name: &str) -> Result<()> {
-    if NAMES.iter().any(|(n, _)| *n == name) {
+    if NAMES.iter().any(|(n, _)| *n == name) || s3_field(name) {
         Ok(())
     } else {
-        bail!("unknown secret {name:?}; one of {}", NAMES.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(", "))
+        bail!("unknown secret {name:?}; one of {}, or s3:<profile>:access_key_id / s3:<profile>:secret_access_key", NAMES.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(", "))
     }
 }
 
@@ -188,6 +202,11 @@ mod tests {
             assert!(s.get("mouser_api_key").is_none());
         }
         assert!(s.set("nope", "x").is_err());
+        s.set("s3:minio:secret_access_key", "SK").unwrap();
+        s.set("s3:minio:access_key_id", "AK").unwrap();
+        assert!(s.holds("s3:minio"));
+        assert!(s.set("s3:minio:other", "x").is_err() && s.set("s3:a b:access_key_id", "x").is_err());
+        assert_eq!(fields("s3:minio").unwrap(), vec!["s3:minio:access_key_id", "s3:minio:secret_access_key"]);
         assert!(s.backend().starts_with("file:"));
         let _ = std::fs::remove_dir_all(&d);
     }

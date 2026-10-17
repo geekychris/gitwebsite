@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-const UA: &str = "gitwebsite-companion/1 (+https://geekychris.github.io/tools/)";
+const UA: &str = "gitwebsite-companion/1.2 (+https://geekychris.github.io/tools/)";
 const CACHE_TTL: Duration = Duration::from_secs(2);
 const PARTS_MAX_BODY: usize = 64 * 1024;
 const KAFKA_MAX_BODY: usize = 8 * 1024 * 1024;
@@ -37,6 +37,13 @@ const FIXED: &[(&str, &str, Kind)] = &[
     ("adsbfi", "https://opendata.adsb.fi", Kind::Aviation),
     ("opensky", "https://opensky-network.org", Kind::Aviation),
     ("awc", "https://aviationweather.gov", Kind::Aviation),
+    // v1.2: public data APIs without CORS (GET only, cached 2 s like the aviation feeds).
+    ("noaa-coops", "https://api.tidesandcurrents.noaa.gov", Kind::Aviation),
+    ("ndbc", "https://www.ndbc.noaa.gov", Kind::Aviation),
+    ("pskreporter", "https://retrieve.pskreporter.info", Kind::Aviation),
+    ("open-meteo", "https://api.open-meteo.com", Kind::Aviation),
+    // An alias of open-meteo (its /v1/elevation API) — not api.open-elevation.com.
+    ("open-elevation", "https://api.open-meteo.com", Kind::Aviation),
     ("digikey", "https://api.digikey.com", Kind::Parts),
     ("mouser", "https://api.mouser.com", Kind::Parts),
     ("nexar", "https://api.nexar.com", Kind::Parts),

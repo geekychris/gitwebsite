@@ -159,6 +159,12 @@ pub async fn settings_put(h: HeaderMap, Json(patch): Json<Value>) -> Response {
             *g.settings.write().unwrap() = new.clone();
         }
         let restart = new.port != cur.port || new.enabled != cur.enabled;
+        let keys: Vec<&String> = patch.as_object().map(|o| o.keys().collect()).unwrap_or_default();
+        let ev = json!({"event": "settings", "keys": keys, "by": "app"});
+        match companion::global() {
+            Some(g) => g.audit_event(ev),
+            None => companion::audit_append(ev),
+        }
         Ok(json!({ "settings": new, "restart_needed": restart }))
     })();
     match r {
@@ -186,6 +192,33 @@ pub async fn pair_decide(h: HeaderMap, AxPath(which): AxPath<String>, Json(d): J
     }
 }
 
+#[derive(Deserialize)]
+pub struct ApprovalQuery {
+    #[serde(default)]
+    kind: Option<String>,
+}
+
+/// POST /api/companion/approvals/{id, code, or (with ?kind=lan|tcp) target} {allow}
+pub async fn approval_decide(h: HeaderMap, AxPath(which): AxPath<String>, Query(q): Query<ApprovalQuery>, Json(d): Json<Decide>) -> Response {
+    if let Err(e) = same_origin(&h) {
+        return e;
+    }
+    let g = match gateway() {
+        Ok(g) => g,
+        Err(e) => return e,
+    };
+    let which = urlencoding::decode(&which).map(|s| s.into_owned()).unwrap_or(which);
+    let Some(req) = g.approvals.find(&which, q.kind.as_deref()) else {
+        return bad(StatusCode::NOT_FOUND, format!("no pending approval {which:?} (see `gw companion approvals`)"));
+    };
+    let by = if h.get(header::ORIGIN).is_some() { "app" } else { "cli" };
+    match tokio::task::spawn_blocking(move || g.decide_approval(&req.id, d.allow, by)).await {
+        Ok(Ok(r)) => Json(json!({ "decided": r, "allowed": d.allow })).into_response(),
+        Ok(Err(e)) => bad(StatusCode::BAD_REQUEST, format!("{e:#}")),
+        Err(e) => bad(StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
 pub async fn token_revoke(h: HeaderMap, AxPath(id): AxPath<String>) -> Response {
     if let Err(e) = same_origin(&h) {
         return e;
@@ -209,12 +242,12 @@ pub async fn secret_put(h: HeaderMap, AxPath(name): AxPath<String>, Json(b): Jso
     }
     let r = tokio::task::spawn_blocking(move || {
         let store = companion::secrets::Store::user();
-        if b.value.trim().is_empty() {
-            store.delete(&name)
-        } else {
-            store.set(&name, b.value.trim())
+        let action = if b.value.trim().is_empty() { "deleted" } else { "set" };
+        let r = if b.value.trim().is_empty() { store.delete(&name) } else { store.set(&name, b.value.trim()) }.map(|_| store.presence());
+        if r.is_ok() {
+            secret_audit(&name, action);
         }
-        .map(|_| store.presence())
+        r
     })
     .await;
     match r {
@@ -230,13 +263,25 @@ pub async fn secret_delete(h: HeaderMap, AxPath(name): AxPath<String>) -> Respon
     }
     let r = tokio::task::spawn_blocking(move || {
         let s = companion::secrets::Store::user();
-        s.delete(&name).map(|_| s.presence())
+        let r = s.delete(&name).map(|_| s.presence());
+        if r.is_ok() {
+            secret_audit(&name, "deleted");
+        }
+        r
     })
     .await;
     match r {
         Ok(Ok(v)) => Json(json!({ "secrets": v })).into_response(),
         Ok(Err(e)) => bad(StatusCode::BAD_REQUEST, format!("{e:#}")),
         Err(e) => bad(StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
+fn secret_audit(name: &str, action: &str) {
+    let ev = json!({"event": "secret", "names": [name], "action": action, "by": "app"});
+    match companion::global() {
+        Some(g) => g.audit_event(ev),
+        None => companion::audit_append(ev),
     }
 }
 

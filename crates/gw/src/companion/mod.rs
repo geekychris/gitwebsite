@@ -9,14 +9,20 @@
 //! answered (CORS and Private Network Access). Everything except `/v1/hello` and pairing needs a
 //! token from pairing, with the scope of the relay used.
 
+pub mod approvals;
+pub mod lan;
 pub mod pairing;
 pub mod relay_docker;
 pub mod relay_git;
 pub mod relay_http;
 pub mod relay_kube;
+pub mod relay_lan;
+pub mod relay_s3;
 pub mod relay_tcp;
+pub mod relay_ws;
 pub mod secrets;
 pub mod settings;
+pub mod sigv4;
 pub mod view;
 
 use axum::{
@@ -38,11 +44,13 @@ use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{Duration, Instant};
 
-pub const VERSION: &str = "1";
+pub const VERSION: &str = "1.2";
 pub const NAME: &str = "gitwebsite-companion";
 
 /// Called when a pairing request needs the user's decision (the app shows a dialog).
 type PairHook = Box<dyn Fn(pairing::PairRequest) + Send + Sync>;
+/// Called when a first-use approval needs the user's decision (the app shows a dialog).
+type ApprovalHook = Box<dyn Fn(approvals::ApprovalRequest) + Send + Sync>;
 
 pub struct Gateway {
     pub settings: RwLock<Settings>,
@@ -64,6 +72,17 @@ pub struct Gateway {
     /// GW_COMPANION_TEST_UPSTREAMS=1).
     pub(crate) settings_overrides: bool,
     pair_hook: RwLock<Option<PairHook>>,
+    approval_hook: RwLock<Option<ApprovalHook>>,
+    /// First-use approvals (LAN hosts, TCP targets, S3 deletions).
+    pub approvals: approvals::Approvals,
+    /// Tests: DNS answers for relay/lan and relay/ws (rebinding tests).
+    pub dns: lan::DnsOverride,
+    /// HTTP clients for relay/lan (and S3 on the LAN): every name resolved through
+    /// [`lan::LanResolver`]; the second accepts self-signed certificates.
+    pub lan_http: reqwest::Client,
+    pub lan_http_insecure: reqwest::Client,
+    /// Save settings changed by approvals to companion.toml (the user-config gateway only).
+    pub(crate) persist: bool,
 }
 
 impl Gateway {
@@ -77,10 +96,23 @@ impl Gateway {
         }
         let mut g = Self::new(s, Some(dir.join("companion-tokens.json")), Some(dir.join("companion-audit.log")), secrets::Store::user());
         g.settings_overrides = overrides;
+        g.persist = true;
         Ok(g)
     }
 
     pub fn new(s: Settings, tokens: Option<PathBuf>, audit: Option<PathBuf>, secrets: secrets::Store) -> Self {
+        let dns: lan::DnsOverride = Default::default();
+        let lan_client = |insecure: bool| {
+            reqwest::Client::builder()
+                .connect_timeout(Duration::from_secs(10))
+                .redirect(reqwest::redirect::Policy::none())
+                .dns_resolver(Arc::new(lan::LanResolver(dns.clone())))
+                .danger_accept_invalid_certs(insecure)
+                .no_proxy()
+                .build()
+                .expect("lan http client")
+        };
+        let (lan_http, lan_http_insecure) = (lan_client(false), lan_client(true));
         Gateway {
             settings: RwLock::new(s),
             tokens: Tokens::open(tokens),
@@ -100,6 +132,12 @@ impl Gateway {
             upstream_override: Default::default(),
             settings_overrides: false,
             pair_hook: RwLock::new(None),
+            approval_hook: RwLock::new(None),
+            approvals: Default::default(),
+            dns,
+            lan_http,
+            lan_http_insecure,
+            persist: false,
         }
     }
 
@@ -114,6 +152,96 @@ impl Gateway {
 
     pub fn set_pair_hook(&self, f: impl Fn(pairing::PairRequest) + Send + Sync + 'static) {
         *self.pair_hook.write().unwrap() = Some(Box::new(f));
+    }
+
+    pub fn set_approval_hook(&self, f: impl Fn(approvals::ApprovalRequest) + Send + Sync + 'static) {
+        *self.approval_hook.write().unwrap() = Some(Box::new(f));
+    }
+
+    /// Ports on this machine the relays never reach (the companion's and the app's).
+    pub fn own_ports(&self) -> Vec<u16> {
+        vec![self.port.load(Ordering::Relaxed), self.ui_port.load(Ordering::Relaxed)]
+    }
+
+    /// Change the settings in memory, and in companion.toml for the user-config gateway.
+    pub fn update_settings(&self, f: impl FnOnce(&mut Settings)) -> anyhow::Result<Settings> {
+        let mut g = self.settings.write().unwrap();
+        let mut s = g.clone();
+        f(&mut s);
+        s.validate()?;
+        if self.persist {
+            // Merge into the file's current contents (another process may have edited it).
+            let mut disk = Settings::load().unwrap_or_else(|_| s.clone());
+            disk.lan_hosts = s.lan_hosts.clone();
+            disk.tcp_allow = s.tcp_allow.clone();
+            disk.save()?;
+        }
+        *g = s.clone();
+        Ok(s)
+    }
+
+    /// Decide a first-use approval (the app's dialog, the Companion page, `gw companion
+    /// approve`): allowing a `lan` or `tcp` request adds its target to the allow-list.
+    pub fn decide_approval(&self, which: &str, allow: bool, by: &str) -> anyhow::Result<approvals::ApprovalRequest> {
+        let req = self.approvals.find(which, None).ok_or_else(|| anyhow::anyhow!("no pending approval {which:?}"))?;
+        if allow {
+            let t = req.target.clone();
+            match req.kind.as_str() {
+                "lan" => {
+                    self.update_settings(|s| {
+                        if !s.lan_hosts.iter().any(|h| h.eq_ignore_ascii_case(&t)) {
+                            s.lan_hosts.push(t);
+                        }
+                    })?;
+                }
+                "tcp" => {
+                    self.update_settings(|s| {
+                        if !s.tcp_allow.iter().any(|h| h.eq_ignore_ascii_case(&t)) {
+                            s.tcp_allow.push(t);
+                        }
+                    })?;
+                }
+                _ => {}
+            }
+        }
+        let req = self.approvals.decide(&req.id, allow).ok_or_else(|| anyhow::anyhow!("approval {which:?} expired"))?;
+        self.audit_event(json!({"event": "approval", "kind": req.kind, "target": req.target, "origin": req.origin, "tool": req.tool,
+            "decision": if allow { "allowed" } else { "denied" }, "by": by}));
+        Ok(req)
+    }
+
+    /// Ask the user about `kind`/`target` for a paired page and wait for the answer.
+    /// `Err((status, message))` when denied or still undecided.
+    pub async fn ask_approval(&self, kind: &str, target: &str, origin: &str, tool: &str, detail: &str) -> Result<(), (StatusCode, String)> {
+        let what = match kind {
+            "lan" => format!("LAN host {target}"),
+            "tcp" => format!("TCP target {target}"),
+            _ => format!("deleting s3://{target}"),
+        };
+        match self.approvals.ask(kind, target, origin, tool, detail) {
+            approvals::Ask::Denied => Err((StatusCode::FORBIDDEN, format!("{what} was denied in the app (ask again in a few minutes, or add it in the Companion settings)"))),
+            approvals::Ask::Wait { req, rx, new } => {
+                if self.settings.read().unwrap().auto_approve {
+                    let _ = self.decide_approval(&req.id, true, "auto-approve");
+                } else if new {
+                    eprintln!("companion: {} ({}) asks for {what} — code {} (approve in the app or `gw companion approve {}`)", if origin.is_empty() { "(no origin)" } else { origin }, tool, req.code, req.code);
+                    if let Some(f) = self.approval_hook.read().unwrap().as_ref() {
+                        f(req.clone());
+                    }
+                }
+                match approvals::wait(rx, approvals::WAIT).await {
+                    Some(true) => Ok(()),
+                    Some(false) => Err((StatusCode::FORBIDDEN, format!("{what} was denied in the app"))),
+                    None => Err((StatusCode::FORBIDDEN, format!("{what} is waiting for approval in the app (code {}): approve it, then retry", req.code))),
+                }
+            }
+        }
+    }
+
+    /// Write an event (approval decided, settings or secret changed) to the audit log.
+    pub fn audit_event(&self, mut v: Value) {
+        v["at"] = json!(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+        self.audit.log(v);
     }
 
     /// The app's preview origins (auto-paired).
@@ -139,11 +267,14 @@ impl Gateway {
             "origins": allowed_origins(&s.extra_origins),
             "paired": self.tokens.list(),
             "pending": self.pairing.list(),
+            "approvals": self.approvals.list(),
+            "s3": relay_s3::profiles(self),
             "secrets": self.secrets.presence(),
             "secrets_store": self.secrets.backend(),
             "docker": relay_docker::find_socket(&s.docker_host),
             "kube": relay_kube::describe(&s.kubeconfig),
             "upstreams": relay_http::upstream_ids(),
+            "scopes": pairing::SCOPES,
             "view": view::available(),
         })
     }
@@ -271,7 +402,7 @@ fn cors_headers(h: &mut HeaderMap, origin: &str) {
     h.insert("access-control-allow-private-network", HeaderValue::from_static("true"));
     h.insert(
         "access-control-expose-headers",
-        HeaderValue::from_static("Content-Type, X-Relay-Upstream, X-Relay-Cache, X-Rate-Limit-Remaining, X-RateLimit-Remaining, X-RateLimit-Limit, X-BurstLimit-Remaining, Retry-After, Api-Version, Docker-Experimental, Server"),
+        HeaderValue::from_static("Content-Type, Content-Length, Content-Range, Accept-Ranges, ETag, Last-Modified, Location, X-Relay-Upstream, X-Relay-Cache, X-Relay-Status, X-Relay-Location, X-Rate-Limit-Remaining, X-RateLimit-Remaining, X-RateLimit-Limit, X-BurstLimit-Remaining, Retry-After, Api-Version, Docker-Experimental, Server, X-Amz-Request-Id, X-Amz-Version-Id, X-Amz-Delete-Marker"),
     );
 }
 
@@ -307,11 +438,11 @@ async fn gate(State(gw): State<Arc<Gateway>>, mut req: Request, next: Next) -> R
         if !origin.is_empty() {
             cors_headers(h, &origin);
         }
-        h.insert("access-control-allow-methods", HeaderValue::from_static("GET, POST, PUT, DELETE, OPTIONS"));
+        h.insert("access-control-allow-methods", HeaderValue::from_static("GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS"));
         let asked = req.headers().get("access-control-request-headers").cloned();
         h.insert(
             "access-control-allow-headers",
-            asked.unwrap_or_else(|| HeaderValue::from_static("Authorization, Content-Type, Accept, X-Companion-Token")),
+            asked.unwrap_or_else(|| HeaderValue::from_static("Authorization, Content-Type, Accept, X-Companion-Token, X-Upstream-Authorization, Range")),
         );
         h.insert("access-control-max-age", HeaderValue::from_static("600"));
         return r;
@@ -443,6 +574,13 @@ pub fn tagged(mut r: Response, rec: &TokenRecord) -> Response {
 
 // ------------------------------------------------------------------ audit log
 
+/// Append an event to `<config dir>/companion-audit.log` from outside the gateway (the CLI
+/// when the app isn't running).
+pub fn audit_append(mut v: Value) {
+    v["at"] = json!(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+    Audit { path: Some(settings::dir().join("companion-audit.log")), recent: Mutex::new(Default::default()) }.log(v);
+}
+
 struct Audit {
     path: Option<PathBuf>,
     recent: Mutex<std::collections::VecDeque<Value>>,
@@ -490,7 +628,10 @@ impl Audit {
 async fn hello(State(gw): State<Arc<Gateway>>, axum::Extension(Origin(origin)): axum::Extension<Origin>, h: HeaderMap) -> Response {
     let s = gw.settings();
     let mut caps = vec![];
-    for (on, c) in [(s.relays.http, "relay.http"), (s.relays.tcp, "relay.tcp"), (s.relays.docker, "relay.docker"), (s.relays.kube, "relay.kube"), (s.relays.git, "relay.git")] {
+    for (on, c) in [
+        (s.relays.http, "relay.http"), (s.relays.tcp, "relay.tcp"), (s.relays.docker, "relay.docker"), (s.relays.kube, "relay.kube"), (s.relays.git, "relay.git"),
+        (s.relays.lan, "relay.lan"), (s.relays.ws, "relay.ws"), (s.relays.s3, "relay.s3"),
+    ] {
         if on {
             caps.push(c);
         }
@@ -585,6 +726,9 @@ async fn status(State(gw): State<Arc<Gateway>>, axum::Extension(Origin(origin)):
                   "redpanda_proxy": !s.redpanda_proxy.is_empty(), "redpanda_admin": !s.redpanda_admin.is_empty(),
                   "secrets": { "digikey": gw.secrets.holds("digikey"), "mouser": gw.secrets.holds("mouser"), "nexar": gw.secrets.holds("nexar") } },
         "tcp": { "allow": s.tcp_allow },
+        "lan": { "hosts": s.lan_hosts },
+        "ws": { "allow": s.ws_allow },
+        "s3": { "profiles": relay_s3::profiles(&gw) },
         "docker": relay_docker::find_socket(&s.docker_host),
         "kube": relay_kube::describe(&s.kubeconfig),
         "git": { "hosts": relay_git::hosts(&s), "push": s.git_allow_push },
@@ -623,6 +767,10 @@ pub fn router(gw: Arc<Gateway>) -> Router {
         .route("/v1/relay/kube", get(relay_kube::handle))
         .route("/v1/relay/kube/{*rest}", any(relay_kube::handle))
         .route("/v1/relay/git/{*rest}", any(relay_git::handle))
+        .route("/v1/relay/lan/{*rest}", any(relay_lan::handle))
+        .route("/v1/relay/ws", get(relay_ws::handle))
+        .route("/v1/relay/s3", get(relay_s3::handle))
+        .route("/v1/relay/s3/{*rest}", any(relay_s3::handle))
         .fallback(|| async { err(StatusCode::NOT_FOUND, "no such companion endpoint (see /v1/hello)") })
         .layer(middleware::from_fn_with_state(gw.clone(), gate))
         .layer(axum::extract::DefaultBodyLimit::max(64 * 1024 * 1024))
@@ -635,6 +783,43 @@ pub fn bytes_response(code: StatusCode, ctype: &str, body: impl Into<Body>) -> R
     *r.status_mut() = code;
     r.headers_mut().insert(header::CONTENT_TYPE, hv(ctype));
     r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    r
+}
+
+/// A request body streamed upstream, cut off (with an error) past `max` bytes.
+pub fn limited_body(body: Body, max: usize) -> reqwest::Body {
+    use futures_util::StreamExt;
+    let mut seen = 0usize;
+    reqwest::Body::wrap_stream(body.into_data_stream().map(move |c| {
+        let c = c.map_err(std::io::Error::other)?;
+        seen += c.len();
+        if seen > max {
+            return Err(std::io::Error::other(format!("request body over {max} bytes")));
+        }
+        Ok::<_, std::io::Error>(c)
+    }))
+}
+
+/// An upstream response streamed back with a few of its headers. A redirect's `Location` is
+/// passed as `X-Relay-Location` (and dropped), so the browser does not follow it around the relay.
+pub fn stream_back(resp: reqwest::Response, relay: &str, keep: &[&str]) -> Response {
+    let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let mut hm = HeaderMap::new();
+    for k in keep {
+        for v in resp.headers().get_all(*k) {
+            if let (Ok(n), Ok(v)) = (axum::http::HeaderName::from_bytes(k.as_bytes()), HeaderValue::from_bytes(v.as_bytes())) {
+                hm.append(n, v);
+            }
+        }
+    }
+    if let Some(l) = resp.headers().get("location").and_then(|v| HeaderValue::from_bytes(v.as_bytes()).ok()) {
+        hm.insert("x-relay-location", l);
+    }
+    hm.insert("x-relay-upstream", hv(relay));
+    hm.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    let mut r = Response::new(Body::from_stream(resp.bytes_stream()));
+    *r.status_mut() = status;
+    r.headers_mut().extend(hm);
     r
 }
 
