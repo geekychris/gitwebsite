@@ -82,6 +82,49 @@ Three ways to show media, all usable together:
 
 An unknown `media:` key fails the build, so broken images cannot be published.
 
+== 3-D models
+
+A 3-D model goes in with the `model::` block macro, on a line of its own:
+
+[source,asciidoc]
+----
+model::media:wizard-lemming[Wizard lemming, download=true]
+model::media:rock-star-lemming[Rock star lemming, download=true, height=420]
+model::media:ai-force-big-brain-textured[AI Force big brain, download=false, autorotate=false]
+----
+
+It renders Google's https://modelviewer.dev[`<model-viewer>`] (loaded from jsDelivr as a module,
+only on pages that have a model): drag to turn it, pinch or scroll to zoom, it turns slowly by
+itself, and on a phone *View in your space* places it in the room at its printed size (AR Quick
+Look with the USDZ on iPhone and iPad, Scene Viewer on Android, WebXR). Until it loads — and for
+readers without JavaScript — the poster image shows. The caption carries the name, the printed
+size and parts, and a *Download STL (32 MB)* link when there is a download.
+
+Attributes (all optional):
+
+[cols="1,3"]
+|===
+| first positional | caption (default: the library entry's caption, the model's name)
+| `download=true\|false\|<path>` | offer the print file; default true when the entry has one
+| `ar=true\|false` | the AR button (default true)
+| `autorotate=true\|false` | turn slowly until touched (default true)
+| `height=480` | viewer height: `480` (px), `480px`, `30rem`, `60vh`; default `min(72vh, 30rem)`
+| `reveal=auto\|interaction` | `interaction` waits for a click before downloading the model
+| `orbit="30deg 75deg 105%"` | the starting camera angle (model-viewer `camera-orbit`)
+| `alt=`, `poster=`, `ios=` | alt text; poster image and USDZ for a direct path
+|===
+
+Models come from the media library (kind `model`). Make one from the Meshy models repository with
+`gw media add-model <project>/<slug> [--download stl|3mf|none]` or *Models → (a model) → Add to
+site* in the app (see link:integrations.adoc#models-on-the-site[Integrations]). A model can also
+be a file beside the post or a site path or URL — `model::robot.glb[]` (a `robot.usdz` and
+`robot.webp` beside it are picked up), `model::/models/x/x.glb[poster=/models/x/x.webp]`.
+
+`gw check` reports an unknown key, a key that is not a model, `download=true` on a model without a
+download file, and bad attribute values; the page shows a "3-D model unavailable" notice in their
+place. In a story draft use `model::story:<id>[]` (see link:stories.adoc[Stories]). WordPress
+cross-posts get the poster linked to the download instead of the viewer.
+
 == Code playgrounds
 
 Mark a source block as a playground and readers can edit and run it in the browser:

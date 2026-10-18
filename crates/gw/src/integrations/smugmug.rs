@@ -420,6 +420,7 @@ pub fn media_and_image(auth: &Auth, key: &str, album_key: Option<&str>, alt: Opt
         alt: alt.map(|s| s.to_string()).unwrap_or_else(|| field("Title")),
         caption: caption.map(|s| s.to_string()).unwrap_or_else(|| field("Caption")),
         ids,
+        ..Default::default()
     }, img.clone()))
 }
 

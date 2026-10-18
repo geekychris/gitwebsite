@@ -8,6 +8,7 @@ pub mod config;
 pub mod content;
 pub mod ideas;
 pub mod media;
+pub mod model;
 pub mod registry;
 pub mod render;
 pub mod build;

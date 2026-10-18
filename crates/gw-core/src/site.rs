@@ -119,7 +119,14 @@ impl Site {
                 }
             }
             let text = std::fs::read_to_string(&it.path)?;
-            if let Err(e) = media.expand(&text) {
+            let models = crate::model::expand(&text, &crate::model::Env {
+                lib: Some(&media),
+                bundle_dir: it.bundle_dir.as_deref(),
+                static_dir: Some(&self.static_dir()),
+                static_html: false,
+            });
+            problems.extend(models.problems.iter().map(|p| format!("{}: {p}", it.id)));
+            if let Err(e) = media.expand(&models.text) {
                 problems.push(format!("{}: {e}", it.id));
             }
             if it.kind == Kind::App && it.app_url.is_none() {

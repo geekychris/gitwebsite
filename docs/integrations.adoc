@@ -152,3 +152,43 @@ The REST API: `GET /api/meshy/status`, `POST /api/meshy/sync` (`{"recover": fals
 (images from the models repository only), `GET /api/meshy/log` (`?run=&offset=`), `GET|PUT
 /api/meshy/config`, `POST /api/meshy/reveal`, `POST /api/meshy/seen`. MCP tools: `meshy_status`,
 `meshy_sync` (recover needs an explicit `max_credits`), `meshy_models`.
+
+[[models-on-the-site]]
+=== Models on the site
+
+`gw media add-model <project>/<slug>` puts a model on the site for `model::media:<key>[]` (see
+link:authoring.adoc#_3_d_models[Authoring]). It needs Blender (`/Applications/Blender.app`,
+`blender` on the PATH, or `GW_BLENDER`) and the model's local-only textured `<slug>.glb`, and it
+writes into `site/static/models/<key>/`:
+
+[cols="1,3"]
+|===
+| `<key>.glb` | the web model: decimated to `--polycount` (150 000) triangles with UVs and
+  textures kept, textures at most `--max-texture` (2048) px as JPEG, Draco-compressed (model-viewer
+  fetches Google's Draco decoder itself; `--no-draco` for a plain GLB), scaled to its printed size
+  in metres so AR shows it life size. About 2–3 MB.
+| `<key>.usdz` | the same decimated mesh for AR Quick Look on iOS, checked with `usdcat --loadOnly`
+  (left out if it does not load; `--no-usdz` to skip). About 12–14 MB — fetched only when a
+  reader taps the AR button.
+| `poster.webp` | the model's `images/hero.webp`
+| print file | with `--download stl`: the committed `<slug>-print.stl`, or the plate STL for a
+  multi-part model; `--download 3mf` the 3MF. Over 25 MB it warns; `--download-polycount 400000`
+  decimates the STL with Blender (≈50 bytes a triangle) and reports whether it is still closed.
+|===
+
+It then registers `media:<key>` (kind `model`) with `url` (GLB), `ios` (USDZ), `poster`,
+`download` and their sizes, the triangle count, the printed size (`dimensions_mm`), the number of
+parts, and `ids` (`model: <project>/<slug>`, `meshy_id`). `--key` names it (default: the slug);
+running it again for the same model replaces its files; a key that holds something else needs
+`--force`. Nothing in the models repository changes. Commit `static/models/<key>/` with the post —
+mind the size of large print files in the site repository (GitHub refuses files over 100 MB).
+
+In the app: *Models → (a model) → Add to site* asks for the key, the download and the triangle
+counts, and copies the `model::media:<key>[…]` snippet when it is done; *Media → 3-D models* lists
+them with their sizes. REST: `POST /api/media/model` (`{"model": "<project>/<slug>", "key": …,
+"download": "stl"|"3mf"|"none", "polycount": …, "download_polycount": …, "force": …}`). MCP:
+`add_model`.
+
+Stories: add a model to a story like a photo — `gw story add <story> media:<key> --comment "…"` —
+and refer to it in the draft as `model::story:<id>[…]`; `gw story draft` writes
+`model::media:<key>[…]`.

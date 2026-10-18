@@ -24,7 +24,8 @@ const CONVENTIONS: &str = "Content is AsciiDoc. A file starts with `= Title` the
 an image path/URL, :status: draft|published, :visibility: public|unlisted, :repo: URL, :url: (apps: where the app \
 runs), :embed: true (apps: embed in an iframe), :source: <registry id>, :featured: true (home page Featured strip), :pinned: true or :pinned: <n> (pinned to the top of the home page, lowest n first; pinned, featured and latest never repeat each other). Images: \
 image::media:<key>[Alt text] for library media (add_media first), image::photo.jpg[] for files beside a bundle's \
-index.adoc, or image::https://...[] for external URLs; video::media:<key>[]. Runnable code: a block preceded by \
+index.adoc, or image::https://...[] for external URLs; video::media:<key>[]; 3-D models: \
+model::media:<key>[Caption, download=true|false] (add_model first, from the Meshy models repository). Runnable code: a block preceded by \
 [source.playground,javascript] (or python, html). New content is always created as a draft.";
 
 fn tools() -> Value {
@@ -215,6 +216,12 @@ fn tools() -> Value {
         {"name": "add_media", "description": "Register an image or video URL (or site path like /images/x.jpg) under a key, for use as image::media:<key>[] or video::media:<key>[].",
          "inputSchema": s(json!({"key": str_("Letters, digits, - _ ."), "url": str_("Absolute URL or site path"),
             "kind": {"type": "string", "enum": ["image", "video"]}, "alt": str_("Alt text"), "caption": str_("Caption")}), &["key", "url"])},
+        {"name": "add_model", "description": "Put a 3-D model from the Meshy models repository on the site: makes a web GLB (decimated, textured, Draco), a USDZ for AR on iOS, a poster and optionally the print file into static/models/<key>/ with Blender (10-60 s), and registers media:<key>. Show it with model::media:<key>[Caption, download=true]. Returns the files and their sizes.",
+         "inputSchema": s(json!({"model": str_("<project>/<slug>, as meshy_models lists it"), "key": str_("Media key (default: the slug)"),
+            "download": {"type": "string", "enum": ["stl", "3mf", "none"], "description": "Offer readers the print file (default none)"},
+            "polycount": {"type": "integer", "description": "Triangles in the web model (default 150000)"},
+            "download_polycount": {"type": "integer", "description": "Decimate the downloadable STL to this many triangles"},
+            "force": {"type": "boolean", "description": "Replace an existing key holding something else"}}), &["model"])},
     ])
 }
 
@@ -277,7 +284,15 @@ fn call(root: &PathBuf, name: &str, a: &Value) -> Result<Value> {
                 alt: sv(a, "alt").unwrap_or("").into(),
                 caption: sv(a, "caption").unwrap_or("").into(),
                 ids: Default::default(),
+                ..Default::default()
             })
+        }
+        "add_model" => {
+            let mut o: crate::integrations::model_assets::AddModel = serde_json::from_value(a.clone()).context("bad arguments")?;
+            if o.download.is_empty() {
+                o.download = "none".into();
+            }
+            crate::integrations::model_assets::add_model(&site, &o)
         }
         "story_list" => stories::list(&site),
         "story_show" => stories::show(&site, req(a, "slug")?),

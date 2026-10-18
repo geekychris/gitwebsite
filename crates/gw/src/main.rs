@@ -444,7 +444,7 @@ enum StoryCmd {
         #[arg(long)]
         text: Option<String>,
     },
-    /// Write the post from AsciiDoc that uses image::story:<id>[…]; rebuilds the preview.
+    /// Write the post from AsciiDoc that uses image::story:<id>[…] (and model::story:<id>[…] for 3-D models); rebuilds the preview.
     Draft {
         slug: String,
         #[arg(long)]
@@ -559,6 +559,37 @@ enum MediaCmd {
         alt: String,
         #[arg(long, default_value = "")]
         caption: String,
+    },
+    /// Add a 3-D model from the Meshy models repository: makes a web GLB (decimated, textured,
+    /// Draco-compressed), a USDZ for AR on iOS, a poster, and optionally the print file into
+    /// static/models/<key>/, and registers media:<key> for `model::media:<key>[]`. Needs Blender.
+    AddModel {
+        /// The model as <project>/<slug> (see `gw meshy models`).
+        model: String,
+        /// Media key (default: the slug).
+        #[arg(long)]
+        key: Option<String>,
+        /// Offer readers the print file: stl (the print or plate STL), 3mf, or none.
+        #[arg(long, default_value = "none", value_parser = ["stl", "3mf", "none"])]
+        download: String,
+        /// Triangles in the web model.
+        #[arg(long, default_value_t = 150_000)]
+        polycount: u64,
+        /// Decimate the downloadable STL to this many triangles (≈50 bytes each).
+        #[arg(long)]
+        download_polycount: Option<u64>,
+        /// Longest texture edge (px).
+        #[arg(long, default_value_t = 2048)]
+        max_texture: u32,
+        /// Plain GLB (no Draco compression).
+        #[arg(long)]
+        no_draco: bool,
+        /// No USDZ (no AR Quick Look on iOS).
+        #[arg(long)]
+        no_usdz: bool,
+        /// Replace an existing key that holds something else.
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -1038,7 +1069,14 @@ fn main() -> Result<()> {
             MediaCmd::List => ops::media_list(&site)?,
             MediaCmd::Add { key, url, kind, alt, caption } => {
                 let provider = if url.starts_with('/') { "local" } else { "external" };
-                ops::media_add(&site, &key, Media { url, kind, provider: provider.into(), thumb: String::new(), alt, caption, ids: Default::default() })?
+                ops::media_add(&site, &key, Media { url, kind, provider: provider.into(), thumb: String::new(), alt, caption, ids: Default::default(), ..Default::default() })?
+            }
+            MediaCmd::AddModel { model, key, download, polycount, download_polycount, max_texture, no_draco, no_usdz, force } => {
+                use gw::integrations::model_assets::{add_model, AddModel};
+                if !j {
+                    eprintln!("Making web assets for {model} with Blender…");
+                }
+                add_model(&site, &AddModel { model, key, download, polycount, download_polycount, max_texture, draco: !no_draco, no_usdz, force })?
             }
         },
         Cmd::Publish { dry_run, no_push, yes, message } => {

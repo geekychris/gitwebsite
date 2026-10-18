@@ -24,7 +24,9 @@
 //! `media:<key>` (already in the media library), or `url:<https://…>`. A draft refers to
 //! images as `image::story:<id>[Alt]` (and `:hero: story:<id>`); [`draft`] resolves those to a
 //! web-sized copy in the content bundle (resized to at most 2000 px, re-encoded so EXIF —
-//! GPS included — is dropped) or to a `media:<key>` for SmugMug-hosted photos.
+//! GPS included — is dropped) or to a `media:<key>` for SmugMug-hosted photos. 3-D models join
+//! a story from the media library (`media:<key>` of kind `model`, made by `gw media
+//! add-model`) and go into the draft as `model::story:<id>[]`, which becomes `model::media:<key>[]`.
 
 use crate::config::expand_home;
 use crate::content::{self, slugify, Kind};
@@ -1247,8 +1249,9 @@ pub fn render_contact_sheet(tiles: &[SheetTile], cols: u32, title: &str, dst: &P
 
 pub(crate) fn story_ref_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    // image::story:img3[…], image:story:img3[…] (inline), video::story:…, and :hero: story:img3
-    RE.get_or_init(|| Regex::new(r"(?m)(image::?|video::|^:hero:[ \t]*)story:([A-Za-z0-9_\-]+)").unwrap())
+    // image::story:img3[…], image:story:img3[…] (inline), video::story:…, model::story:… (a 3-D
+    // model added from the media library), and :hero: story:img3
+    RE.get_or_init(|| Regex::new(r"(?m)(image::?|video::|model::|^:hero:[ \t]*)story:([A-Za-z0-9_\-]+)").unwrap())
 }
 
 /// The ids a draft refers to with `story:<id>`, in order of first use.
@@ -1396,7 +1399,7 @@ pub fn draft(site: &Site, s: &mut Story, text: &str) -> Result<DraftResult> {
                 ids_map.insert("album_key".to_string(), r.album_key.clone());
             }
             ids_map.insert("story".to_string(), s.slug.clone());
-            let m = Media { url: r.url.clone(), kind: r.kind.clone(), provider: "smugmug".into(), thumb: r.thumb.clone(), alt: String::new(), caption: im.caption.clone(), ids: ids_map };
+            let m = Media { url: r.url.clone(), kind: r.kind.clone(), provider: "smugmug".into(), thumb: r.thumb.clone(), alt: String::new(), caption: im.caption.clone(), ids: ids_map, ..Default::default() };
             if lib.media.get(&key).map(|old| old.url != m.url || old.caption != m.caption).unwrap_or(true) {
                 lib.media.insert(key.clone(), m);
                 lib_changed = true;
@@ -1414,6 +1417,19 @@ pub fn draft(site: &Site, s: &mut Story, text: &str) -> Result<DraftResult> {
             bail!("{id}: unknown source {}", im.source);
         };
         resolved.insert(id.clone(), target);
+    }
+    // 3-D models (media-library entries of kind `model`) go in with model::, everything else not.
+    let is_model = |id: &str| {
+        s.image(id).ok().and_then(|im| im.source.strip_prefix("media:")).and_then(|k| lib.resolve(k)).is_some_and(|m| m.kind == "model")
+    };
+    for c in story_ref_re().captures_iter(text) {
+        match (&c[1] == "model::", is_model(&c[2])) {
+            (true, false) => bail!("model::story:{} — {} is not a 3-D model (add one with `gw media add-model`, then `gw story add <story> media:<key>`)", &c[2], &c[2]),
+            (false, true) if c[1].starts_with("image") || c[1].starts_with("video") => {
+                warnings.push(format!("{} is a 3-D model; use model::story:{}[] to show it", &c[2], &c[2]))
+            }
+            _ => {}
+        }
     }
     let body = story_ref_re()
         .replace_all(text, |c: &regex::Captures| format!("{}{}", &c[1], resolved.get(&c[2]).cloned().unwrap_or_default()))
@@ -1687,6 +1703,26 @@ mod tests {
         assert!(written.contains(":status: draft"));
         assert_eq!(s.status, "drafted");
         assert_eq!(s.draft.as_deref(), Some("content/projects/the-amiga-exhibit/index.adoc"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn draft_passes_models_through() {
+        let (site, root) = test_site();
+        std::fs::write(root.join("media.yaml"), "media:\n  wiz:\n    url: /models/wiz/wiz.glb\n    kind: model\n  bench:\n    url: https://example.org/b.jpg\n").unwrap();
+        let mut s = Story::create(&site, &NewStory { title: "Lemmings".into(), target: Some("article".into()), ..Default::default() }).unwrap();
+        s.add_remote(StoryImage { source: "media:wiz".into(), include: true, notes: "The wizard".into(), ..Default::default() });
+        s.add_remote(StoryImage { source: "media:bench".into(), include: true, notes: "A bench".into(), ..Default::default() });
+        assert_eq!(referenced_ids("model::story:img1[Wizard, download=true]\n"), vec!["img1"]);
+        let r = draft(&site, &mut s, "= Printed lemmings\n\nmodel::story:img1[Wizard, download=true]\n\nimage::story:img2[Bench]\n").unwrap();
+        let w = std::fs::read_to_string(root.join(&r.path)).unwrap();
+        assert!(w.contains("model::media:wiz[Wizard, download=true]"), "{w}");
+        assert!(r.warnings.iter().all(|x| !x.contains("3-D")), "{:?}", r.warnings);
+        // A photo is not a model, and a model shown as an image is flagged.
+        let bad = draft(&site, &mut s, "= Printed lemmings\n\nmodel::story:img2[]\n");
+        assert!(bad.unwrap_err().to_string().contains("not a 3-D model"));
+        let r = draft(&site, &mut s, "= Printed lemmings\n\nimage::story:img1[]\n").unwrap();
+        assert!(r.warnings.iter().any(|x| x.contains("model::story:img1")), "{:?}", r.warnings);
         std::fs::remove_dir_all(root).unwrap();
     }
 

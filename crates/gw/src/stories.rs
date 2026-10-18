@@ -64,7 +64,7 @@ fn image_json(site: &Site, s: &Story, im: &StoryImage) -> Value {
     v["original_path"] = json!(s.local_path(site, im).map(|p| abs(&p)));
     // What the app shows: the hosted thumbnail, or the API's thumbnail endpoint.
     v["thumb_url"] = json!(match &im.remote {
-        Some(r) if !r.thumb.is_empty() => r.thumb.clone(),
+        Some(r) if !r.thumb.is_empty() && !r.thumb.starts_with('/') => r.thumb.clone(),
         _ => format!("/api/stories/{}/images/{}/thumb", s.slug, im.id),
     });
     v
@@ -171,10 +171,19 @@ fn http() -> Result<reqwest::blocking::Client> {
     Ok(reqwest::blocking::Client::builder().user_agent("gitwebsite/0.1").timeout(std::time::Duration::from_secs(120)).build()?)
 }
 
-/// Download a hosted image's thumbnail into the review cache (best effort).
-fn fetch_thumb(slug: &str, id: &str, url: &str) -> Result<std::path::PathBuf> {
+/// Download a hosted image's thumbnail into the review cache (best effort). A site path
+/// (`/models/x/poster.webp`, a 3-D model's poster) is read from the site's static folder.
+fn fetch_thumb(site: &Site, slug: &str, id: &str, url: &str) -> Result<std::path::PathBuf> {
     let dst = story::thumb_path(slug, id);
     if dst.exists() {
+        return Ok(dst);
+    }
+    if let Some(rel) = url.strip_prefix('/') {
+        if !gw_core::model::safe_ref(url) {
+            bail!("{url}: not a usable site path");
+        }
+        let bytes = std::fs::read(site.static_dir().join(rel)).with_context(|| format!("reading {url} from the site"))?;
+        story::write_thumb_bytes(&bytes, &dst)?;
         return Ok(dst);
     }
     let r = http()?.get(url).send()?;
@@ -290,7 +299,14 @@ pub fn add(site: &Site, slug: &str, a: &AddArgs) -> Result<Value> {
                 notes: comment.clone(),
                 include: true,
                 state: state.into(),
-                remote: Some(Remote { url: m.url.clone(), thumb: if m.thumb.is_empty() { m.url.clone() } else { m.thumb.clone() }, kind: m.kind.clone(), ..Default::default() }),
+                // A 3-D model shows its poster; its url is the GLB.
+                remote: Some(Remote {
+                    url: m.url.clone(),
+                    thumb: [&m.thumb, &m.poster].into_iter().find(|t| !t.is_empty()).cloned()
+                        .unwrap_or_else(|| if m.kind == "model" { String::new() } else { m.url.clone() }),
+                    kind: m.kind.clone(),
+                    ..Default::default()
+                }),
                 ..Default::default()
             });
         } else if src.starts_with("http://") || src.starts_with("https://") {
@@ -368,7 +384,7 @@ pub fn add(site: &Site, slug: &str, a: &AddArgs) -> Result<Value> {
     for im in &added {
         match &im.remote {
             Some(r) => {
-                let _ = fetch_thumb(&s.slug, &im.id, &r.thumb);
+                let _ = fetch_thumb(site, &s.slug, &im.id, &r.thumb);
             }
             None => {
                 let _ = s.thumb_local(site, im);
@@ -685,7 +701,7 @@ pub fn contact_sheet(site: &Site, slug: &str, which: &str, page: usize, per_page
                 (i, sc.spawn(move || -> Option<PathBuf> {
                     match s.thumb_local(site, im) {
                         Ok(Some(p)) => Some(p),
-                        Ok(None) => im.remote.as_ref().and_then(|r| fetch_thumb(&s.slug, &im.id, if r.thumb.is_empty() { &r.url } else { &r.thumb }).ok()),
+                        Ok(None) => im.remote.as_ref().and_then(|r| fetch_thumb(site, &s.slug, &im.id, if r.thumb.is_empty() { &r.url } else { &r.thumb }).ok()),
                         Err(_) => None,
                     }
                 }))
@@ -792,7 +808,7 @@ pub fn thumb_file(site: &Site, slug: &str, id: &str) -> Result<std::path::PathBu
         return Ok(p);
     }
     let r = im.remote.as_ref().context("no image to show")?;
-    fetch_thumb(slug, id, &r.thumb)
+    fetch_thumb(site, slug, id, &r.thumb)
 }
 
 // ------------------------------------------------------------------ notes, interview, outline, draft
@@ -858,7 +874,7 @@ pub fn review_images(site: &Site, slug: &str) -> Result<Value> {
         let path = match s.thumb_local(site, im) {
             Ok(Some(p)) => Ok(p),
             Ok(None) => match &im.remote {
-                Some(r) => fetch_thumb(&s.slug, &im.id, if r.thumb.is_empty() { &r.url } else { &r.thumb }),
+                Some(r) => fetch_thumb(site, &s.slug, &im.id, if r.thumb.is_empty() { &r.url } else { &r.thumb }),
                 None => Err(anyhow::anyhow!("nothing to show")),
             },
             Err(e) => Err(e),
@@ -953,7 +969,7 @@ pub fn smugmug_pick(site: &Site, slug: &str, picks: &[Pick]) -> Result<Value> {
     })?;
     for im in &added {
         if let Some(r) = &im.remote {
-            let _ = fetch_thumb(&s.slug, &im.id, &r.thumb);
+            let _ = fetch_thumb(site, &s.slug, &im.id, &r.thumb);
         }
     }
     Ok(json!({

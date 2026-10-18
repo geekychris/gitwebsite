@@ -6,6 +6,7 @@
 pub mod html2adoc;
 pub mod keychain;
 pub mod meshy;
+pub mod model_assets;
 pub mod oauth1;
 pub mod photos;
 pub mod smugmug;
