@@ -5,6 +5,7 @@
 //!   `app`, `playground`)
 //! - `/articles/`, `/projects/`, `/areas/` and `/areas/<path>/`, `/tags/<tag>/`, `/lab/`
 //! - `/publications/` from registry entries of kind `publication`
+//! - `/models/` and `/models/<project>/<slug>/`: the 3-D models gallery (see [`crate::gallery`])
 //! - `feed.xml` (Atom), `sitemap.xml`, `search.json`, `robots.txt`, `404.html`
 //!
 //! Drafts are left out unless `drafts` is set (for local preview). Unlisted items are built
@@ -503,6 +504,31 @@ pub fn build(site: &Site, opts: &BuildOptions) -> Result<BuildReport> {
         write("tools/index.html", tera.render("tools.html", &c)?, &mut files)?;
     }
 
+    // The 3-D models gallery (models.yaml + static/model-gallery/): /models/ and one page per model.
+    let mut gallery_urls: Vec<String> = vec![];
+    if let Some(g) = crate::gallery::Gallery::load(&site.root)?.filter(|g| !g.models.is_empty()) {
+        // Its problems are already among the warnings (from `site.check()`).
+        let gp = crate::gallery::pages(&g, &st_dir, &media, &cfg.site.base_url, &mut vec![]);
+        if !gp.cards.is_empty() {
+            let mut c = base("/models/", &gp.title, false);
+            c.insert("heading", &gp.title);
+            c.insert("intro", &gp.intro);
+            c.insert("cards", &gp.cards);
+            c.insert("projects", &gp.projects);
+            c.insert("og_image", &gp.cards.first().map(|m| m.og_image.clone()).unwrap_or_default());
+            write("models/index.html", tera.render("models.html", &c).context("rendering models.html")?, &mut files)?;
+            gallery_urls.push("/models/".into());
+            for m in &gp.cards {
+                let mut c = base(&m.url, &m.name, false);
+                c.insert("heading", &gp.title);
+                c.insert("m", m);
+                c.insert("viewer_js", crate::model::VIEWER_JS);
+                write(&page_file(&m.url), tera.render("model.html", &c).with_context(|| format!("rendering model.html for {}", m.key))?, &mut files)?;
+                gallery_urls.push(m.url.clone());
+            }
+        }
+    }
+
     {
         let pubs: Vec<&Entry> = registry.entries.iter().filter(|e| e.kind == "publication").collect();
         let mut groups: Vec<(String, Vec<&Entry>)> = vec![];
@@ -527,6 +553,7 @@ pub fn build(site: &Site, opts: &BuildOptions) -> Result<BuildReport> {
         write("feed.xml", tera.render("feed.xml", &c)?, &mut files)?;
         let mut urls: Vec<String> = vec!["/".into(), "/articles/".into(), "/projects/".into(), "/areas/".into(), "/lab/".into(), "/tools/".into()];
         urls.extend(listed.iter().map(|v| v.item.url.clone()));
+        urls.extend(gallery_urls.iter().cloned());
         urls.extend(cfg.flat_areas().into_iter().map(|(p, _)| format!("/areas/{p}/")));
         let pubs_public = registry.entries.iter().any(|e| e.kind == "publication")
             && registry.entries.iter().filter(|e| e.kind == "publication").all(|e| e.visibility == "public");

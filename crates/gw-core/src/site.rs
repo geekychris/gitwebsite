@@ -133,6 +133,7 @@ impl Site {
                 problems.push(format!("{}: apps need a :url:", it.id));
             }
         }
+        problems.extend(crate::gallery::check(&self.root, &self.static_dir(), &media));
         Ok(problems)
     }
 }

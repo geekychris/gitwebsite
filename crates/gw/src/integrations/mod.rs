@@ -9,6 +9,7 @@ pub mod meshy;
 pub mod model_assets;
 pub mod oauth1;
 pub mod photos;
+pub mod site_models;
 pub mod smugmug;
 pub mod wordpress;
 pub mod xmlrpc;

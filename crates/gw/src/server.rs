@@ -408,6 +408,22 @@ async fn smugmug_album(State(st): State<AppState>) -> ApiResult {
     with_site(&st, crate::integrations::smugmug::site_album).await
 }
 
+/// GET /api/site-models — the website's models gallery selection (models.yaml).
+async fn site_models_get(State(st): State<AppState>) -> ApiResult {
+    with_site(&st, crate::integrations::site_models::state).await
+}
+
+/// PUT /api/site-models {changes: [{key: "<project>/<slug>" | project: "<p>", on?, viewer?, featured?}]}
+/// — switch models on/off the website (keys must be models in the repository), write models.yaml
+/// and copy/remove their pictures in static/model-gallery/.
+async fn site_models_put(State(st): State<AppState>, Json(b): Json<crate::integrations::site_models::Changes>) -> ApiResult {
+    with_site(&st, move |s| {
+        let repo = crate::integrations::meshy::Ctx::load()?.repo.ok_or_else(|| anyhow::anyhow!("no Meshy models repository: `gw meshy config --repo <path>`"))?;
+        crate::integrations::site_models::apply(s, &repo, &b)
+    })
+    .await
+}
+
 // ------------------------------------------------------------------ handlers: stories
 
 async fn stories_list(State(st): State<AppState>) -> ApiResult {
@@ -1115,6 +1131,7 @@ fn router_for(st: AppState) -> Router {
         .route("/api/stories/{slug}/discard", post(story_discard))
         .route("/api/stories/{slug}/request-changes", post(story_request_changes))
         .route("/api/stories/{slug}/claude", get(story_claude_status).post(story_claude_start).delete(story_claude_stop))
+        .route("/api/site-models", get(site_models_get).put(site_models_put))
         .route("/api/meshy/status", get(meshy_api::status))
         .route("/api/meshy/sync", post(meshy_api::sync))
         .route("/api/meshy/models", get(meshy_api::models))

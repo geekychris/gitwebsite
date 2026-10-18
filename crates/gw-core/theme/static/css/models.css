@@ -1,0 +1,95 @@
+/* The 3-D models gallery (/models/, models.html and model.html). Uses the site's colour tokens
+   (--bg, --surface, --ink, --muted, --line, --accent, --wash …), so it follows the site's light
+   and dark themes. A site's own static/css/models.css replaces this file. */
+
+.mg-count { color: var(--muted); font-size: .95rem; margin: -.4rem 0 1rem; font-variant-numeric: tabular-nums; }
+.mg-chips[hidden] { display: none; }
+.mg-chips { display: flex; flex-wrap: wrap; gap: .4rem; margin: 0 0 1.4rem; }
+.mg-chip { font: inherit; font-size: .88rem; color: var(--muted); background: var(--surface); border: 1px solid var(--line);
+  border-radius: 999px; padding: .28rem .8rem; cursor: pointer; }
+.mg-chip span { color: var(--faint); font-size: .8rem; font-variant-numeric: tabular-nums; margin-left: .15rem; }
+.mg-chip:hover { color: var(--ink); border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
+.mg-chip[aria-pressed="true"] { color: var(--bg); background: var(--ink); border-color: var(--ink); }
+.mg-chip[aria-pressed="true"] span { color: color-mix(in srgb, var(--bg) 70%, transparent); }
+.mg-chip:focus-visible, .mg-card a:focus-visible, .mg-views a:focus-visible, .mg-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Grid */
+.mg-grid { list-style: none; margin: 0 0 2rem; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 1rem; }
+.mg-card[hidden] { display: none; }
+.mg-card a { display: flex; flex-direction: column; height: 100%; color: inherit; text-decoration: none; background: var(--surface);
+  border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow);
+  transition: transform .15s ease, border-color .15s; }
+.mg-card a:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+.mg-thumb { display: block; aspect-ratio: 1; background: radial-gradient(120% 90% at 50% 25%, var(--surface), var(--wash)); }
+.mg-thumb img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.mg-body { display: flex; flex-direction: column; gap: .3rem; padding: .75rem .9rem .9rem; flex: 1; }
+.mg-name { font-size: 1.02rem; line-height: 1.3; }
+.mg-sum { color: var(--muted); font-size: .9rem; line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.mg-facts { display: flex; flex-wrap: wrap; gap: .3rem .5rem; align-items: center; margin-top: auto; padding-top: .3rem; color: var(--faint); font-size: .8rem; font-variant-numeric: tabular-nums; }
+.mg-pill { background: var(--wash); color: var(--muted); border-radius: 999px; padding: .05rem .5rem; font-size: .76rem; }
+.mg-pill.warn { color: var(--accent-ink); background: color-mix(in srgb, var(--accent) 12%, var(--wash)); }
+.mg-pill.accent { color: var(--bg); background: var(--accent); font-weight: 650; }
+
+/* Detail: the model's page, and the same article inside the gallery's dialog */
+.mg-crumbs { font-size: .9rem; color: var(--faint); margin: 0 0 1rem; }
+.mg-crumbs a { color: var(--muted); text-decoration: none; }
+.mg-crumbs a:hover { color: var(--ink); }
+.mg-detail { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 2rem; align-items: start; }
+.mg-stage { position: relative; aspect-ratio: 1; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden;
+  background: radial-gradient(120% 90% at 50% 25%, var(--surface), var(--wash)); }
+.mg-big { display: block; width: 100%; height: 100%; object-fit: contain; }
+.mg-big[hidden], .mg-3d[hidden] { display: none; }
+.mg-3d, .mg-3d .model-figure { height: 100%; margin: 0; }
+.mg-3d .model-figure { display: flex; flex-direction: column; }
+.mg-3d .model-figure model-viewer { flex: 1; height: auto; min-height: 0; border: 0; border-radius: 0; background: transparent; }
+.mg-3d .model-figure figcaption { margin: 0; padding: .35rem .7rem .5rem; }
+.mg-3d .model-title, .mg-3d .model-facts { display: none; }
+.mg-views { list-style: none; display: flex; flex-wrap: wrap; gap: .5rem; margin: .7rem 0 0; padding: 0; }
+.mg-views li[hidden] { display: none; }
+.mg-views a { display: flex; flex-direction: column; align-items: center; gap: .15rem; width: 76px; padding: .25rem; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--muted); font-size: .75rem; text-decoration: none; }
+.mg-views a:hover { color: var(--ink); }
+.mg-views a[aria-current="true"] { border-color: var(--accent); color: var(--ink); box-shadow: 0 0 0 1px var(--accent); }
+.mg-views img { width: 64px; height: 64px; object-fit: contain; border-radius: 6px; background: var(--wash); }
+.mg-3d-tile { display: grid; place-items: center; width: 64px; height: 64px; border-radius: 6px; background: var(--accent); color: var(--bg);
+  font-weight: 800; letter-spacing: -.02em; }
+.mg-hint { color: var(--faint); font-size: .8rem; margin: .5rem 0 0; }
+.mg-info .mg-title { font: 780 clamp(1.7rem, 3.6vw, 2.4rem)/1.12 var(--sans); letter-spacing: -.02em; margin: .2rem 0 .5rem; }
+.mg-info .lede { font-size: 1.1rem; }
+.mg-facts-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: .6rem 1rem; margin: 1rem 0 1.2rem; padding: .9rem 1rem;
+  border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.mg-facts-list dt { font-size: .74rem; text-transform: uppercase; letter-spacing: .07em; color: var(--faint); font-weight: 700; }
+.mg-facts-list .wide { grid-column: 1 / -1; }
+.mg-facts-list dd { margin: .1rem 0 0; font-variant-numeric: tabular-nums; }
+.mg-desc p { margin: 0 0 .9rem; }
+.mg-pager { display: flex; justify-content: space-between; gap: 1rem; margin-top: 1.4rem; padding-top: 1rem; border-top: 1px solid var(--line); font-size: .92rem; }
+.mg-pager a { text-decoration: none; }
+
+/* Dialog */
+.mg-dialog { width: min(1180px, calc(100vw - 2rem)); max-height: calc(100vh - 2rem); padding: 0; border: 1px solid var(--line);
+  border-radius: calc(var(--radius) + 4px); background: var(--bg); color: var(--ink); box-shadow: 0 20px 60px rgba(0, 0, 0, .25); }
+.mg-dialog::backdrop { background: rgba(10, 10, 12, .55); backdrop-filter: blur(3px); }
+.mg-dialog-bar { position: sticky; top: 0; z-index: 2; display: flex; justify-content: flex-end; padding: .6rem .8rem 0; pointer-events: none; }
+.mg-close { pointer-events: auto; font: inherit; font-size: .88rem; color: var(--muted); background: var(--surface); border: 1px solid var(--line);
+  border-radius: 8px; padding: .3rem .6rem; cursor: pointer; }
+.mg-close kbd { font: 600 .7rem var(--mono); border: 1px solid var(--line); border-radius: 4px; padding: 0 .3rem; margin-left: .25rem; }
+.mg-dialog [data-mg-dialog-body] { padding: .2rem 1.6rem 1.6rem; }
+.mg-dialog [data-mg-dialog-body].loading { min-height: 50vh; }
+html.mg-lock { overflow: hidden; }
+
+@media (max-width: 860px) {
+  .mg-detail { grid-template-columns: 1fr; gap: 1.2rem; }
+}
+@media (max-width: 640px) {
+  .mg-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .65rem; }
+  .mg-body { padding: .55rem .65rem .7rem; }
+  .mg-name { font-size: .95rem; }
+  .mg-sum { font-size: .84rem; -webkit-line-clamp: 2; }
+  .mg-views { gap: .3rem; }
+  .mg-views a { width: 52px; padding: .2rem; font-size: .7rem; }
+  .mg-views img, .mg-3d-tile { width: 42px; height: 42px; }
+  .mg-3d-tile { font-size: .8rem; }
+  .mg-close kbd, .mg-hint { display: none; }
+  .mg-dialog { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; margin: 0; border-radius: 0; border: 0; }
+  .mg-dialog [data-mg-dialog-body] { padding: 0 1rem 1.4rem; }
+}

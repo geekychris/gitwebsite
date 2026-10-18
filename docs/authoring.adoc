@@ -120,6 +120,9 @@ site* in the app (see link:integrations.adoc#models-on-the-site[Integrations]). 
 be a file beside the post or a site path or URL — `model::robot.glb[]` (a `robot.usdz` and
 `robot.webp` beside it are picked up), `model::/models/x/x.glb[poster=/models/x/x.webp]`.
 
+For a gallery of models rather than one in a post, see link:integrations.adoc#models-gallery[the
+website's models gallery] (`/models/`, chosen in `models.yaml`).
+
 `gw check` reports an unknown key, a key that is not a model, `download=true` on a model without a
 download file, and bad attribute values; the page shows a "3-D model unavailable" notice in their
 place. In a story draft use `model::story:<id>[]` (see link:stories.adoc[Stories]). WordPress

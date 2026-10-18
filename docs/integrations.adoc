@@ -189,6 +189,68 @@ them with their sizes. REST: `POST /api/media/model` (`{"model": "<project>/<slu
 "download": "stl"|"3mf"|"none", "polycount": …, "download_polycount": …, "force": …}`). MCP:
 `add_model`.
 
+[[models-gallery]]
+=== The website's models gallery
+
+Besides models in posts, the site can have a gallery of them: `/models/` (a card grid with project
+filters) and a page per model, `/models/<project>/<slug>/` (every angle render, the description,
+printed size, parts, triangle count, and — where switched on — the interactive 3-D viewer). Only
+the models you switch on are shown. The choice lives in the site, in `models.yaml` beside
+`site.yaml`:
+
+[source,yaml]
+----
+title: 3-D models
+intro: Figures and props I have made with Meshy.ai and printed.
+projects:                          # optional chip titles/descriptions
+  ai-force: { title: AI Force }
+models:
+  - key: lemmings/wizard-lemming   # <project>/<slug> in the models repository
+    viewer: true                   # the interactive viewer (needs a web model, below)
+    featured: true                 # first in the grid
+  - key: ai-force/ai-force-teen
+    order: 5                       # before models without an order
+    name: AI Force teen            # optional overrides: name, summary, description
+----
+
+The pictures come from the models repository, but the build never reads it: switching a model on
+copies its renders (`hero`, `front`, `side`, `top`, `plate`, `thumb` — WebP, about 130 kB a model)
+and a trimmed `meta.json` (name, summary, description, printed size, parts, triangles; no Meshy
+task ids or prompts) into `site/static/model-gallery/<project>/<slug>/`; switching it off removes
+that folder. Commit `models.yaml` and `static/model-gallery/` together; the gallery then builds
+from the site repository alone. After editing `models.yaml` by hand, or when the repository's
+renders change, run `gw models sync-site`.
+
+The interactive viewer uses the site's web model for that model — a `kind: model` media entry
+whose `ids.model` is the key, made by `gw media add-model <project>/<slug> --download none`. It is
+loaded only when a model is opened. A print-file download appears only if that media entry has
+one. `gw check` reports a selected model whose pictures are missing and a viewer without a web
+model.
+
+[cols="1,3"]
+|===
+| `gw models list` | the selection, whether each model's pictures are in the site, its web model
+| `gw models on <p>/<s>… [--viewer]`, `--project <p>`, `--all` | put models on the website
+| `gw models off <p>/<s>…`, `--project <p>` | take them off
+| `gw models viewer <p>/<s> --on\|--off` | the interactive 3-D viewer
+| `gw models sync-site` | copy the selected models' pictures into the site, remove the rest
+|===
+
+In the app, the *Models* page shows "N on the website" and a *Website: All / On / Off* filter;
+every card has a *Show on website* switch, a selected project has *Show all on website* / *Hide
+all*, and a model's panel has *Show on website* and *Interactive 3-D* (which first makes the web
+model with Blender, 10–60 s, when the site has none). *Gallery preview* opens `/preview/models/`
+(rebuild the preview to see changes). REST: `GET /api/site-models`; `PUT /api/site-models`
+`{"changes": [{"key": "<project>/<slug>" | "project": "<p>", "on": true, "viewer": true,
+"featured": true}]}` — keys must be models in the repository.
+
+The pages use the templates `models.html` and `model.html` and `static/css/models.css` and
+`static/js/models.js` (a site's own files of the same name replace them). Without JavaScript the
+grid links to the model pages and the angle thumbnails to the images; with it, project chips
+filter the grid (`/models/#<project>`), a card opens the model in a dialog (the address becomes the
+model's page, so it can be shared), and the thumbnails or ← → switch the views. Each model page
+has its hero render as its Open Graph image; all are in the sitemap.
+
 Stories: add a model to a story like a photo — `gw story add <story> media:<key> --comment "…"` —
 and refer to it in the draft as `model::story:<id>[…]`; `gw story draft` writes
 `model::media:<key>[…]`.
