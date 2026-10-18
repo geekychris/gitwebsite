@@ -47,6 +47,12 @@ module; run `gw smugmug --help` for the exact list):
    `gw story add <story> media:<key> --comment "…"`, then write `model::story:<id>[…]`.
 3. Commit `static/models/<key>/` with the post; `gw check` flags unknown or non-model keys.
 
+The site also has a **models gallery** (`/models/`, a page per model) of the models the user
+switches on, kept in `site/models.yaml`: `gw models on <project>/<slug>… [--viewer]` /
+`--project <p>` / `off …` / `viewer <key> --on|--off`, or the app's *Show on website* switches.
+They copy the renders into `static/model-gallery/` (`gw models sync-site` after hand edits);
+commit both. The viewer needs a web model (`gw media add-model <key> --download none`).
+
 ## Rules
 
 - Always give images meaningful alt text.

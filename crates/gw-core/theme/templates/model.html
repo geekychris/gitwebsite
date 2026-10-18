@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{# One model of the 3-D models gallery: /models/<project>/<slug>/. The [data-model-detail]
+   article is also what the gallery page shows in its dialog (fetched from this page). #}
+{% block description %}{{ m.summary }}{% endblock %}
+{% block og %}<meta property="og:type" content="article"><meta property="og:description" content="{{ m.summary }}"><meta property="og:image" content="{{ m.og_image }}"><meta property="og:image:alt" content="{{ m.name }}"><meta name="twitter:card" content="summary_large_image">{% endblock %}
+{% block head %}<link rel="stylesheet" href="/css/models.css">{% if m.viewer_html %}
+<script type="module" src="{{ viewer_js }}"></script>{% endif %}{% endblock %}
+{% block main %}
+<div class="wrap block page-top mg mg-page">
+  <p class="mg-crumbs"><a href="/models/">{{ heading }}</a> <span aria-hidden="true">›</span> <a href="/models/#{{ m.project }}">{{ m.project_title }}</a></p>
+  <article class="mg-detail" data-model-detail data-key="{{ m.key }}">
+    <div class="mg-stage-col">
+      <div class="mg-stage" data-mg-stage>
+        {% if m.viewer_html %}<div class="mg-3d" data-mg-3d hidden>{{ m.viewer_html | safe }}</div>{% endif %}
+        <img class="mg-big" data-mg-big src="{{ m.hero }}" alt="{{ m.name }}: hero view" width="1200" height="1200" decoding="async">
+      </div>
+      <ul class="mg-views" data-mg-views aria-label="Views">
+        {% if m.viewer_html %}<li hidden data-mg-3d-tab><a href="{{ m.url }}#3d" data-mg-view="3d" aria-label="Interactive 3-D view"><span class="mg-3d-tile" aria-hidden="true">3-D</span><span>Turn it</span></a></li>{% endif %}
+        {% for i in m.images %}<li><a href="{{ i.url }}" data-mg-view="{{ i.name }}" data-src="{{ i.url }}" data-alt="{{ m.name }}: {{ i.name }} view"{% if loop.first %} aria-current="true"{% endif %}><img src="{{ i.url }}" alt="" width="96" height="96" loading="lazy" decoding="async"><span>{{ i.label }}</span></a></li>{% endfor %}
+      </ul>
+      <p class="mg-hint" data-mg-hint hidden>← → to switch views</p>
+    </div>
+    <div class="mg-info">
+      <p class="eyebrow">{{ m.project_title }}</p>
+      <h1 class="mg-title">{{ m.name }}</h1>
+      {% if m.summary %}<p class="lede">{{ m.summary }}</p>{% endif %}
+      <dl class="mg-facts-list">
+        {% if m.dims %}<div><dt>Printed size</dt><dd>{{ m.dims }}</dd></div>{% endif %}
+        <div><dt>Parts</dt><dd>{% if m.multi_part %}{{ m.parts }} parts{% if m.plates %} on {{ m.plates }} build plate{% if m.plates > 1 %}s{% endif %}{% endif %}{% else %}One piece{% endif %}</dd></div>
+        {% if m.triangles_text %}<div><dt>Triangles</dt><dd>{{ m.triangles_text }}</dd></div>{% endif %}
+        {% if m.orientation %}<div class="wide"><dt>Prints</dt><dd>{{ m.orientation }}</dd></div>{% endif %}
+        {% if m.created_human %}<div><dt>Made</dt><dd>{{ m.created_human }}</dd></div>{% endif %}
+      </dl>
+      <div class="mg-desc">{{ m.description_html | safe }}</div>
+      <nav class="mg-pager" aria-label="More models">
+        {% if m.prev %}<a rel="prev" href="{{ m.prev.url }}" data-mg-nav>← {{ m.prev.name }}</a>{% else %}<span></span>{% endif %}
+        {% if m.next %}<a rel="next" href="{{ m.next.url }}" data-mg-nav>{{ m.next.name }} →</a>{% endif %}
+      </nav>
+    </div>
+  </article>
+</div>
+<script src="/js/models.js" defer></script>
+{% endblock %}

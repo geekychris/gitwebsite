@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{# The 3-D models gallery: /models/. Works without JavaScript (each card links to the model's own
+   page); with it, project chips filter the grid and a card opens the model in a dialog. #}
+{% block description %}{{ intro }}{% endblock %}
+{% block og %}<meta property="og:type" content="website"><meta property="og:description" content="{{ intro }}">{% if og_image %}<meta property="og:image" content="{{ og_image }}">{% endif %}{% endblock %}
+{% block head %}<link rel="stylesheet" href="/css/models.css">{% endblock %}
+{% block main %}
+<section class="wrap block page-top mg" data-mg-index>
+  <h1>{{ heading }}</h1>
+  <p class="lede">{{ intro }}</p>
+  <p class="mg-count" aria-live="polite"><span data-mg-count>{{ cards | length }}</span> <span data-mg-count-of>model{% if cards | length != 1 %}s{% endif %}{% if projects | length > 1 %} in {{ projects | length }} projects{% endif %}</span></p>
+  {% if projects | length > 1 %}
+  <nav class="mg-chips" aria-label="Filter by project" data-mg-chips hidden>
+    <button type="button" class="mg-chip" aria-pressed="true" data-mg-project="">All <span>{{ cards | length }}</span></button>
+    {% for p in projects %}<button type="button" class="mg-chip" aria-pressed="false" data-mg-project="{{ p.id }}"{% if p.description %} title="{{ p.description }}"{% endif %}>{{ p.title }} <span>{{ p.count }}</span></button>{% endfor %}
+  </nav>
+  {% endif %}
+  <ul class="mg-grid" data-mg-grid>
+    {% for m in cards %}
+    <li class="mg-card" data-project="{{ m.project }}">
+      <a href="{{ m.url }}" data-mg-open>
+        <span class="mg-thumb"><img src="{{ m.thumb }}" alt="" width="240" height="240" loading="lazy" decoding="async"></span>
+        <span class="mg-body">
+          <strong class="mg-name">{{ m.name }}</strong>
+          {% if m.summary %}<span class="mg-sum">{{ m.summary }}</span>{% endif %}
+          <span class="mg-facts">{% if m.dims %}<span>{{ m.dims }}</span>{% endif %}{% if m.multi_part %}<span class="mg-pill warn">{{ m.parts }} parts</span>{% endif %}{% if m.viewer_html %}<span class="mg-pill accent" title="Turn it in 3-D">3-D</span>{% endif %}<span class="mg-pill">{{ m.project_title }}</span></span>
+        </span>
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+  <p class="empty" data-mg-none hidden>No models in this project.</p>
+</section>
+<dialog class="mg-dialog" data-mg-dialog aria-label="Model">
+  <div class="mg-dialog-bar"><button type="button" class="mg-close" data-mg-close aria-label="Close">Close <kbd>Esc</kbd></button></div>
+  <div data-mg-dialog-body></div>
+</dialog>
+<script src="/js/models.js" defer></script>
+{% endblock %}

@@ -108,6 +108,16 @@ pub fn expand(text: &str, env: &Env) -> Expanded {
     out
 }
 
+/// The `<figure class="model-figure">` with a `<model-viewer>` for library model `key`, without
+/// the component's `<script>` (the page loads it): what the models gallery shows. `reveal=auto`;
+/// a download only when the entry offers one.
+pub fn viewer_html(lib: &Library, key: &str, caption: &str, static_dir: Option<&Path>) -> anyhow::Result<String> {
+    let mut named = BTreeMap::new();
+    named.insert("reveal".to_string(), "auto".to_string());
+    let env = Env { lib: Some(lib), bundle_dir: None, static_dir, static_html: false };
+    figure(&format!("media:{key}"), &[caption.to_string()], &named, &env, false)
+}
+
 /// AsciiDoc-style attribute list: comma-separated, `name=value` or positional, values may be
 /// quoted (`"a, b"`).
 pub fn parse_attrs(s: &str) -> (Vec<String>, BTreeMap<String, String>) {

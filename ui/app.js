@@ -489,15 +489,41 @@ function miniMarkdown(md, dir) {
   return out.join('\n');
 }
 
+/** The website gallery's selection (GET /api/site-models), as last loaded. */
+let siteModels = null;
+
+/** Switch models on/off the website (writes the site's models.yaml and copies the pictures). */
+async function setOnSite(changes, el, after) {
+  if (el) el.disabled = true;
+  try {
+    const r = await api('PUT', '/site-models', { changes });
+    siteModels = r;
+    const s = r.sync || {};
+    toast(`${r.count} model${r.count === 1 ? '' : 's'} on the website${(s.problems || []).length ? ' · ' + s.problems.join(' · ') : ''}`, (s.problems || []).length > 0);
+    if (after) after(r);
+    return r;
+  } catch (e) {
+    toast(e.message, true);
+    if (el && el.type === 'checkbox') el.checked = !el.checked;
+  } finally { if (el) el.disabled = false; }
+}
+
 async function viewModels(rest = []) {
   stopMeshyPoll();
   const filter = sessionStorage.getItem('gw-models-project') || 'all';
-  const [st, lib] = await Promise.all([
+  const webFilter = sessionStorage.getItem('gw-models-web') || 'all';   // all | on | off
+  const [st, lib, web] = await Promise.all([
     get('/meshy/status'),
     get('/meshy/models').catch(e => ({ error: e.message, models: [], projects: [] })),
+    get('/site-models').catch(e => ({ error: e.message, models: [], web_models: {} })),
   ]);
   markModelsNav(st);
-  const shown = lib.models.filter(m => filter === 'all' || m.project === filter);
+  siteModels = web;
+  const onSite = new Map((web.models || []).map(x => [x.key, x]));
+  const keyOf = m => `${m.project}/${m.slug}`;
+  const inProject = lib.models.filter(m => filter === 'all' || m.project === filter);
+  const shown = inProject.filter(m => webFilter === 'all' || (webFilter === 'on') === onSite.has(keyOf(m)));
+  const projOn = inProject.filter(m => onSite.has(keyOf(m))).length;
   const last = st.last_sync, run = st.running;
   const lastText = last ? `${relTime(last.finished || last.started)}` : 'never';
   const lastNote = last ? (last.ok ? `ok · ${(last.summary || {}).new || 0} new · ${esc(last.trigger)}` : `<span class="bad">${esc(last.error || 'failed')}</span>`) : 'no sync recorded yet';
@@ -532,16 +558,36 @@ async function viewModels(rest = []) {
     ${lib.error ? `<p class="list problems">${esc(lib.error)}</p>` : ''}
     <div class="bar">${chip('all', 'All', lib.models.length)}${lib.projects.map(p => chip(p.id, p.id, p.count)).join('')}</div>
     ${filter !== 'all' ? `<p class="muted small">${esc((lib.projects.find(p => p.id === filter) || {}).description || '')}</p>` : ''}
-    <div class="model-grid">${shown.map(m => `
-      <a class="model-card" href="#models/${encodeURIComponent(m.project)}/${encodeURIComponent(m.slug)}">
+    <div class="bar site-bar">
+      <span class="site-count" data-site-count><strong>${onSite.size}</strong> on the website${web.bytes ? ` <span class="muted small">(${fmtBytes(web.bytes)} of pictures in the site)</span>` : ''}</span>
+      <span class="muted small">Website:</span>
+      ${[['all', 'All'], ['on', 'On'], ['off', 'Off']].map(([id, label]) => `<button class="chip${id === webFilter ? ' on' : ''}" data-webfilter="${id}">${label}</button>`).join('')}
+      <span class="grow"></span>
+      ${filter !== 'all' ? `<button data-site-project="on" ${projOn === inProject.length ? 'disabled' : ''} title="Put every ${esc(filter)} model on the website">Show all ${inProject.length} on website</button>
+        <button data-site-project="off" ${projOn ? '' : 'disabled'}>Hide all</button>` : '<span class="muted small">Pick a project to show or hide all of it.</span>'}
+      <a class="btn" href="/preview/models/" target="_blank" title="The gallery in the preview build (Build &amp; Publish → Build preview to refresh)">Gallery preview ↗</a>
+    </div>
+    ${web.error ? `<p class="list problems">${esc(web.error)}</p>` : ''}
+    <div class="model-grid">${shown.map(m => {
+      const k = keyOf(m), w = onSite.get(k);
+      return `
+      <div class="model-card${w ? ' on-site' : ''}">
+        <a class="model-link" href="#models/${encodeURIComponent(m.project)}/${encodeURIComponent(m.slug)}">
         <div class="thumb">${m.thumb ? `<img src="${meshyFile(m.thumb)}" alt="" loading="lazy">` : '<span>no image</span>'}</div>
         <div class="body"><strong>${esc(m.name)}</strong>
           <p>${esc(m.summary || m.first_line || '')}</p>
           <div class="facts"><span>${esc(fmtDims(m.dimensions_mm))}</span>${m.triangles ? `<span>${fmtTris(m.triangles)} tris</span>` : ''}
-            ${m.multi_part ? `<span class="pill warn">${esc(m.parts)} parts</span>` : ''}${filter === 'all' ? `<span class="pill">${esc(m.project)}</span>` : ''}</div></div>
-      </a>`).join('') || '<p class="empty">No models here.</p>'}</div>
+            ${m.multi_part ? `<span class="pill warn">${esc(m.parts)} parts</span>` : ''}${filter === 'all' ? `<span class="pill">${esc(m.project)}</span>` : ''}
+            ${w && w.viewer ? '<span class="pill published" title="Interactive 3-D viewer on the website">3-D</span>' : ''}</div></div>
+        </a>
+        <label class="site-toggle" title="Show this model in the website's /models/ gallery"><input type="checkbox" data-site-toggle="${esc(k)}" ${w ? 'checked' : ''}> Show on website</label>
+      </div>`;
+    }).join('') || '<p class="empty">No models here.</p>'}</div>
     <div data-detail></div>`;
   $$('[data-project]').forEach(b => b.onclick = () => { sessionStorage.setItem('gw-models-project', b.dataset.project); viewModels(rest); });
+  $$('[data-webfilter]').forEach(b => b.onclick = () => { sessionStorage.setItem('gw-models-web', b.dataset.webfilter); viewModels(rest); });
+  $$('[data-site-toggle]').forEach(c => c.onchange = () => setOnSite([{ key: c.dataset.siteToggle, on: c.checked }], c, () => viewModels(rest)));
+  $$('[data-site-project]').forEach(b => b.onclick = () => setOnSite([{ project: filter, on: b.dataset.siteProject === 'on' }], b, () => viewModels(rest)));
   const start = async (body, what) => guard(async () => {
     await api('POST', '/meshy/sync', body);
     toast(what);
@@ -609,6 +655,7 @@ async function showModel(project, slug) {
     <div class="facts big"><span>${esc(fmtDims(m.dimensions_mm))}</span>${m.triangles ? `<span>${Number(m.triangles).toLocaleString()} triangles</span>` : ''}
       ${m.multi_part ? `<span class="pill warn">${esc(m.parts)} parts on ${esc(m.plates || 1)} plate${m.plates > 1 ? 's' : ''}</span>` : '<span class="pill">single part</span>'}
       ${m.textured ? '<span class="pill">textured</span>' : ''}${m.watertight === false ? '<span class="pill">not watertight</span>' : ''}</div>
+    <div class="bar site-detail" data-site-detail></div>
     <div class="bar"><button data-reveal>Show in Finder</button>
       <button class="primary" data-add-site title="Make a web model (GLB + USDZ for AR + poster) in the site and register it as media:&lt;key&gt; for model::media:&lt;key&gt;[] — needs Blender">Add to site</button>
       <span class="muted small">Print: ${(m.print_files || []).map(f => `<code>${esc(f)}</code>`).join(', ') || '—'}${m.full_res_stl ? ` · full resolution (local only): <code>${esc(m.full_res_stl)}</code>` : ''}</span></div>
@@ -623,6 +670,7 @@ async function showModel(project, slug) {
     $$('[data-view]', box).forEach(x => x.classList.toggle('on', x === b));
   });
   $('[data-reveal]', box).onclick = () => guard(async () => { await api('POST', '/meshy/reveal', { project, slug }); });
+  renderSiteDetail(box, project, slug);
   $('[data-add-site]', box).onclick = async () => {
     const hasStl = (m.print_files || []).some(f => f.endsWith('.stl'));
     const v = await form(`Add “${m.name}” to the site`, [
@@ -651,6 +699,57 @@ async function showModel(project, slug) {
       } finally { b.disabled = false; b.textContent = 'Add to site'; }
     });
   };
+}
+
+/** "Show on website" and "Interactive 3-D" in a model's detail panel. Turning 3-D on makes the
+ *  web model first (gw media add-model, no download) when the site has none for this model. */
+async function renderSiteDetail(box, project, slug) {
+  const el = $('[data-site-detail]', box);
+  if (!el) return;
+  const web = siteModels || await get('/site-models').catch(() => null);
+  if (!web) return (el.hidden = true);
+  const key = `${project}/${slug}`;
+  const w = (web.models || []).find(x => x.key === key);
+  const mk = (web.web_models || {})[key];
+  el.innerHTML = `
+    <label class="site-toggle big"><input type="checkbox" data-d-on ${w ? 'checked' : ''}> Show on website</label>
+    <label class="site-toggle big" title="${mk ? `Uses media:${esc(mk)}` : 'Makes a web model with Blender first (10–60 s): media:' + esc(slug)}"><input type="checkbox" data-d-viewer ${w && w.viewer ? 'checked' : ''}> Interactive 3-D</label>
+    <span class="muted small" data-d-note>${mk ? `web model: <code>media:${esc(mk)}</code>` : 'no web model yet'}</span>
+    ${w ? `<a class="btn" href="/preview/models/${encodeURIComponent(project)}/${encodeURIComponent(slug)}/" target="_blank">Preview page ↗</a>` : ''}`;
+  const refresh = () => {
+    renderSiteDetail(box, project, slug);
+    if (location.hash.startsWith('#models')) refreshModelCard(key);
+  };
+  $('[data-d-on]', el).onchange = e => setOnSite([{ key, on: e.target.checked }], e.target, refresh);
+  $('[data-d-viewer]', el).onchange = async e => {
+    const cb = e.target, want = cb.checked;
+    if (want && !mk) {
+      cb.disabled = true;
+      const note = $('[data-d-note]', el);
+      const t0 = Date.now();
+      const tick = setInterval(() => { note.textContent = `Making the web model with Blender… ${Math.round((Date.now() - t0) / 1000)} s (10–60 s)`; }, 500);
+      try {
+        const r = await api('POST', '/media/model', { model: key, key: slug, download: 'none' });
+        toast(`Made media:${r.key}${(r.warnings || []).length ? ' · ' + r.warnings.join(' · ') : ''}`);
+      } catch (err) {
+        clearInterval(tick); cb.checked = false; cb.disabled = false;
+        note.textContent = 'no web model yet';
+        return toast(err.message, true);
+      }
+      clearInterval(tick);
+      cb.disabled = false;
+    }
+    setOnSite([{ key, viewer: want }], cb, refresh);
+  };
+}
+
+/** Update one card's toggle after the detail panel changed it. */
+function refreshModelCard(key) {
+  const c = $(`[data-site-toggle="${CSS.escape(key)}"]`);
+  const w = (siteModels && siteModels.models || []).find(x => x.key === key);
+  if (c) { c.checked = !!w; c.closest('.model-card').classList.toggle('on-site', !!w); }
+  const n = $('[data-site-count] strong');
+  if (n && siteModels) n.textContent = siteModels.count;
 }
 
 /** A count of newly arrived models beside "Models" in the sidebar. */
