@@ -1,4 +1,5 @@
-//! The public 3-D models gallery: `/models/` and `/models/<project>/<slug>/`.
+//! The public 3-D models gallery: a grid — in a post with `models::gallery[]` (the gallery's home;
+//! `/models/` then redirects there), or else at `/models/` — and `/models/<project>/<slug>/`.
 //!
 //! Which models are shown is the site's own choice, kept in `models.yaml` beside `site.yaml`:
 //!
@@ -74,6 +75,10 @@ pub struct Pick {
     pub summary: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// When it was put on the website (YYYY-MM-DD; set by `gw models on` and the app). The
+    /// gallery article's "updated" date follows the newest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub added: Option<String>,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -158,7 +163,7 @@ impl Gallery {
                 Ok(true)
             }
             (true, None) => {
-                let pick = Pick { key: key.to_string(), ..Default::default() };
+                let pick = Pick { key: key.to_string(), added: Some(chrono::Local::now().date_naive().to_string()), ..Default::default() };
                 match self.models.iter().rposition(|m| m.key.split('/').next() == Some(project)) {
                     Some(i) => self.models.insert(i + 1, pick),
                     None => self.models.push(pick),
@@ -447,6 +452,8 @@ pub struct Card {
     /// The `<model-viewer>` figure, when the viewer is on and the site has the web model.
     pub viewer_html: String,
     pub media_key: String,
+    /// Posts that show this model (`model::media:<key>[]`), filled in by the build.
+    pub used_in: Vec<NavLink>,
     pub prev: Option<NavLink>,
     pub next: Option<NavLink>,
 }
@@ -575,6 +582,7 @@ pub fn pages(g: &Gallery, static_dir: &Path, lib: &crate::media::Library, base_u
             featured: pick.featured,
             viewer_html,
             media_key,
+            used_in: vec![],
             prev: None,
             next: None,
             name,
@@ -608,9 +616,106 @@ pub fn pages(g: &Gallery, static_dir: &Path, lib: &crate::media::Library, base_u
     }
 }
 
+// ------------------------------------------------------------------ the gallery in a post
+
+/// `models::gallery[]`: the gallery's grid (project chips, cards, the model dialog) inside an
+/// article or page. Options: `project=<id>` (only that project's models, no chips),
+/// `chips=false`. The first post with an unfiltered gallery is the gallery's home: `/models/`
+/// sends readers there, the model pages link back to it, and its "updated" date follows the
+/// newest model added.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct Embed {
+    pub project: Option<String>,
+    pub chips: bool,
+}
+
+fn embed_re() -> &'static regex::Regex {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| regex::Regex::new(r"^models::gallery\[(.*)\]\s*$").unwrap())
+}
+
+fn embed_opts(attrs: &str) -> Result<Embed> {
+    let (_, named) = crate::model::parse_attrs(attrs);
+    let mut e = Embed { project: None, chips: true };
+    for (k, v) in named {
+        match k.as_str() {
+            "project" if safe_segment(&v) => e.project = Some(v),
+            "project" => bail!("project={v:?} is not a project id"),
+            "chips" => e.chips = !matches!(v.trim(), "false" | "no" | "off" | "0"),
+            _ => bail!("unknown option {k}= (use project= or chips=)"),
+        }
+    }
+    Ok(e)
+}
+
+/// The `models::gallery[]` lines of a post (verbatim blocks skipped), with bad options as errors.
+pub fn embeds(text: &str) -> Vec<Result<Embed>> {
+    crate::model::macro_lines(text)
+        .into_iter()
+        .filter(|(_, live)| *live)
+        .filter_map(|(l, _)| embed_re().captures(l.trim_end_matches(['\n', '\r'])).map(|c| embed_opts(&c[1])))
+        .collect()
+}
+
+/// Replace each `models::gallery[]` line with a passthrough block of `render(options)`; a bad
+/// one becomes a notice and a problem.
+pub fn expand(text: &str, mut render: impl FnMut(&Embed) -> Result<String>) -> (String, Vec<String>) {
+    let mut problems = vec![];
+    let mut out = String::with_capacity(text.len());
+    for (line, live) in crate::model::macro_lines(text) {
+        let Some(c) = live.then(|| embed_re().captures(line.trim_end_matches(['\n', '\r']))).flatten() else {
+            out.push_str(line);
+            continue;
+        };
+        let html = embed_opts(&c[1]).and_then(|e| render(&e)).unwrap_or_else(|e| {
+            problems.push(format!("models::gallery: {e:#}"));
+            format!("<p class=\"model-missing\">Models gallery unavailable: {}</p>", crate::model::esc(&format!("{e:#}")))
+        });
+        out.push_str(&format!("++++\n{html}\n++++\n"));
+    }
+    (out, problems)
+}
+
+/// The newest `added` date among the selected models (or, for models without one, the date the
+/// model was made), for the gallery article's "updated" date.
+pub fn latest_change(g: &Gallery, static_dir: &Path) -> Option<chrono::NaiveDate> {
+    g.models
+        .iter()
+        .filter_map(|m| m.added.clone().or_else(|| read_meta(static_dir, &m.key).ok().map(|x| x.created)))
+        .filter_map(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok())
+        .max()
+}
+
+/// The pages narrowed to one project (for `models::gallery[project=…]`).
+pub fn only_project(p: &Pages, project: &str) -> Pages {
+    Pages {
+        title: p.title.clone(),
+        intro: p.intro.clone(),
+        cards: p.cards.iter().filter(|c| c.project == project).cloned().collect(),
+        projects: p.projects.iter().filter(|c| c.id == project).cloned().collect(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gallery_macro() {
+        let t = "= A\n\nText.\n\nmodels::gallery[]\n\n----\nmodels::gallery[]\n----\nmodels::gallery[project=lemmings, chips=false]\nmodels::gallery[project=../x]\n";
+        let e = embeds(t);
+        assert_eq!(e.len(), 3);
+        assert_eq!(e[0].as_ref().unwrap(), &Embed { project: None, chips: true });
+        assert_eq!(e[1].as_ref().unwrap(), &Embed { project: Some("lemmings".into()), chips: false });
+        assert!(e[2].is_err());
+        let (out, problems) = expand(t, |e| Ok(format!("<grid {}>", e.project.clone().unwrap_or_default())));
+        assert!(out.contains("Text.\n\n++++\n<grid >\n++++\n"));
+        assert!(out.contains("----\nmodels::gallery[]\n----"), "verbatim blocks are left alone");
+        assert!(out.contains("<grid lemmings>"));
+        assert_eq!(problems.len(), 1);
+        assert!(out.contains("model-missing"));
+        assert!(embed_opts("size=3").is_err());
+    }
 
     fn tmp(name: &str) -> PathBuf {
         static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -788,6 +893,39 @@ mod tests {
         let sm = read("sitemap.xml");
         assert!(sm.contains("https://example.org/models/</loc>") && sm.contains("/models/lemmings/wiz/</loc>") && sm.contains("/models/lemmings/gino/</loc>"));
         assert!(r.files.iter().any(|f| f == "models/lemmings/gino/index.html"));
+        assert!(wiz.contains("<a href=\"/models/\">Models</a>"), "no gallery post: the crumbs go to /models/");
+
+        // The gallery as a living article: /models/ sends readers to it, the model pages link
+        // back to it, its updated date follows the newest model, and posts that show a model
+        // are listed on the model's page.
+        std::fs::create_dir_all(root.join("content/articles")).unwrap();
+        std::fs::write(root.join("content/articles/my-models.adoc"), "= My 3-D models\n:type: article\n:date: 2026-01-05\n:status: published\n:hero: /model-gallery/lemmings/wiz/hero.webp\n\nAll of them.\n\nmodels::gallery[]\n").unwrap();
+        std::fs::write(root.join("content/articles/wizardry.adoc"), "= Wizardry\n:type: article\n:date: 2026-02-01\n:status: published\n\nmodel::media:wiz[The wizard]\n").unwrap();
+        std::fs::write(root.join("content/articles/secret.adoc"), "= Secret\n:type: article\n:date: 2026-02-01\n:status: draft\n\nmodel::media:wiz[]\n").unwrap();
+        let mut g = Gallery::load(&root).unwrap().unwrap();
+        g.models[0].added = Some("2026-09-30".into());
+        g.save(&root).unwrap();
+        let r = crate::build::build(&site, &crate::build::BuildOptions { drafts: false, out_dir: Some(out.clone()) }).unwrap();
+        assert!(!r.warnings.iter().any(|w| w.contains("gallery")), "{:?}", r.warnings);
+        let art = read("articles/my-models/index.html");
+        assert!(art.contains("All of them.") && art.contains("data-mg-index") && art.contains("mg-embed"));
+        assert!(art.contains("/models/lemmings/wiz/") && art.contains("/model-gallery/lemmings/gino/thumb.webp"));
+        assert!(art.contains("/css/models.css") && art.contains("/js/models.js") && art.contains("data-mg-dialog"));
+        assert!(art.contains("updated 30 September 2026"), "living: the newest model's date");
+        assert!(!art.contains("doc-hero") && art.contains("og:image\" content=\"/model-gallery/lemmings/wiz/hero.webp"), "the hero is for cards and previews, not above the grid");
+        assert!(art.contains("1 min read"), "the cards are not counted as reading");
+        let index = read("models/index.html");
+        assert!(index.contains("http-equiv=\"refresh\" content=\"0; url=/articles/my-models/\"") && index.contains("location.replace(\"/articles/my-models/\" + location.hash)"));
+        assert!(!read("sitemap.xml").contains("/models/</loc>") && read("sitemap.xml").contains("/models/lemmings/wiz/</loc>"));
+        let wiz = read("models/lemmings/wiz/index.html");
+        assert!(wiz.contains("<a href=\"/articles/my-models/\">My 3-D models</a>"), "crumbs go to the gallery post");
+        assert!(wiz.contains("Appears in <a href=\"/articles/wizardry/\">Wizardry</a></p>"), "drafts are not listed");
+        assert!(!read("models/lemmings/gino/index.html").contains("Appears in"));
+        // Only one project, without chips.
+        std::fs::write(root.join("content/articles/wizardry.adoc"), "= Wizardry\n:type: article\n:date: 2026-02-01\n:status: published\n\nmodels::gallery[project=nope]\n").unwrap();
+        crate::build::build(&site, &crate::build::BuildOptions { drafts: false, out_dir: Some(out.clone()) }).unwrap();
+        assert!(read("articles/wizardry/index.html").contains("<span data-mg-count>0</span>"));
+        std::fs::remove_dir_all(root.join("content/articles")).unwrap();
 
         // An unsynced model and a viewer without a web model are reported by check (and left out).
         std::fs::write(root.join(FILE), "models:\n  - key: lemmings/gino\n    viewer: true\n  - key: lemmings/other\n").unwrap();

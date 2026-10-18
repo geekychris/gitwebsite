@@ -45,13 +45,21 @@ module; run `gw smugmug --help` for the exact list):
 2. **Embed** on its own line: `model::media:<key>[Caption, download=true]` (also `ar=`,
    `autorotate=`, `height=480`, `reveal=interaction`). In a story draft: add it with
    `gw story add <story> media:<key> --comment "…"`, then write `model::story:<id>[…]`.
+   Or let gitwebsite place it: `gw models add <post> <media-key|project/slug> [--caption …]
+   [--after-line N]` [`post_add_model`] (makes the web model first if needed); list a post's
+   models with `gw models in <post>` [`post_models`]; take one out with `gw models remove <post>
+   <model>|#n` [`post_remove_model`]. The app: the editor's *3-D models* panel, or Models → a
+   model → *In posts* / *Add to post…*.
 3. Commit `static/models/<key>/` with the post; `gw check` flags unknown or non-model keys.
 
-The site also has a **models gallery** (`/models/`, a page per model) of the models the user
-switches on, kept in `site/models.yaml`: `gw models on <project>/<slug>… [--viewer]` /
-`--project <p>` / `off …` / `viewer <key> --on|--off`, or the app's *Show on website* switches.
-They copy the renders into `static/model-gallery/` (`gw models sync-site` after hand edits);
-commit both. The viewer needs a web model (`gw media add-model <key> --download none`).
+The site also has a **models gallery** (a page per model at `/models/<project>/<slug>/`) of the
+models the user switches on, kept in `site/models.yaml`: `gw models on <project>/<slug>…
+[--viewer]` / `--project <p>` / `off …` / `viewer <key> --on|--off`, or the app's *Show on
+website* switches. They copy the renders into `static/model-gallery/` (`gw models sync-site` after
+hand edits); commit both. The viewer needs a web model (`gw media add-model <key> --download
+none`). The grid itself lives in a post — a living article — with `models::gallery[]` on its own
+line (`models::gallery[project=<id>]` for one project); `/models/` then redirects there and the
+post's updated date follows the newest model added.
 
 ## Rules
 

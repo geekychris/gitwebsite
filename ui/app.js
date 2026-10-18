@@ -221,10 +221,12 @@ async function viewEditor(id) {
       <button class="primary" data-save>Save</button>
       <button data-release>${it.draft ? 'Release (publish at next deploy)' : 'Back to draft'}</button>
       <button data-refresh>Rebuild preview</button>
+      <button data-models-toggle title="The 3-D models this post shows: add, caption, remove">3-D models</button>
       <a class="btn" href="${esc(it.url)}" target="_blank" data-open>Open preview ↗</a>
       ${String(it.id).startsWith('ext:') ? '' : '<button data-enhance title="Rework this post with Claude: answer a few questions, Claude reads the code repository, and proposes a revision you review">✦ Enhance with Claude</button>'}
       <span class="grow"></span><span class="muted" data-dirty></span>
     </div>
+    <div class="post-models" data-models hidden></div>
     <div class="editor"><textarea spellcheck="false" data-src></textarea><iframe data-frame title="Preview"></iframe></div>`;
   const ta = $('[data-src]');
   ta.value = it.source_text;
@@ -245,6 +247,19 @@ async function viewEditor(id) {
   });
   $('[data-save]').onclick = save;
   $('[data-refresh]').onclick = () => guard(rebuild);
+  const panel = $('[data-models]');
+  const dirty = () => ($('[data-dirty]').textContent = 'Unsaved changes');
+  const showModels = () => renderPostModels(panel, ta, () => { dirty(); showModels(); });
+  const modelsBtn = $('[data-models-toggle]');
+  const countModels = () => { const n = postModelLines(ta.value).length; modelsBtn.textContent = `3-D models${n ? ` (${n})` : ''}`; };
+  ta.addEventListener('input', countModels);
+  countModels();
+  modelsBtn.onclick = () => {
+    panel.hidden = !panel.hidden;
+    sessionStorage.setItem('gw-editor-models', panel.hidden ? '' : '1');
+    if (!panel.hidden) showModels();
+  };
+  if (sessionStorage.getItem('gw-editor-models') || /[?&]models\b/.test(location.hash)) { panel.hidden = false; showModels(); }
   const enh = $('[data-enhance]');
   if (enh) enh.onclick = () => guard(async () => {
     if ($('[data-dirty]').textContent === 'Unsaved changes' && !(await ask('Unsaved changes', 'You have unsaved changes. Enhance the saved version anyway?', 'Enhance the saved version'))) return;
@@ -258,6 +273,246 @@ async function viewEditor(id) {
     viewEditor(id);
   });
   showPreview();
+}
+
+// ---------------------------------------------------------------- 3-D models in a post
+// The editor's "3-D models" panel works on the text in the editor (Save writes it), with the
+// same rules as gw-core's model.rs: one model::…[] line per model, never inside listing,
+// literal, comment or passthrough blocks, and always a block of its own.
+
+const MODEL_LINE = /^model::([^\s\[\]]+)\[(.*)\]\s*$/;
+
+/** Which lines may hold a block macro (false inside verbatim blocks and on their delimiters). */
+function liveLines(lines) {
+  let open = null;
+  return lines.map(l => {
+    const t = l.replace(/\r$/, '').trimEnd();
+    if (open) { if (t === open) open = null; return false; }
+    if (t.length >= 4 && /^(-+|\.+|\/+|\++)$/.test(t)) { open = t; return false; }
+    if (t.startsWith('```')) { open = '```'; return false; }
+    return true;
+  });
+}
+
+function postModelLines(text) {
+  const lines = text.split('\n');
+  const live = liveLines(lines);
+  const out = [];
+  lines.forEach((l, i) => {
+    const m = live[i] && MODEL_LINE.exec(l.replace(/\r$/, ''));
+    if (m) {
+      const a = parseMacroAttrs(m[2]);
+      out.push({ index: out.length, line: i, target: m[1], key: m[1].startsWith('media:') ? m[1].slice(6) : null,
+        caption: a.pos[0] ?? a.named.caption ?? '', named: a.named });
+    }
+  });
+  return out;
+}
+
+/** AsciiDoc attribute list → {pos: [...], named: {...}} (as model.rs parse_attrs). */
+function parseMacroAttrs(s) {
+  const parts = []; let cur = '', q = null;
+  for (const ch of s) {
+    if (!q && (ch === '"' || ch === "'") && (cur.trim() === '' || cur.endsWith('='))) { q = ch; cur += ch; }
+    else if (q && ch === q) { q = null; cur += ch; }
+    else if (!q && ch === ',') { parts.push(cur); cur = ''; }
+    else cur += ch;
+  }
+  if (cur.trim() || parts.length) parts.push(cur);
+  const unq = v => { v = v.trim(); for (const c of ['"', "'"]) if (v.length >= 2 && v.startsWith(c) && v.endsWith(c)) return v.slice(1, -1); return v; };
+  const pos = [], named = {};
+  for (const p of parts) {
+    const m = /^\s*([A-Za-z][A-Za-z0-9_-]*)\s*=([\s\S]*)$/.exec(p);
+    if (m) named[m[1].toLowerCase()] = unq(m[2]); else pos.push(unq(p));
+  }
+  return { pos, named };
+}
+
+function modelMacro(target, caption, named = {}) {
+  const attrs = [];
+  const c = (caption || '').trim().replace(/]/g, ')').replace(/[\r\n]+/g, ' ');
+  if (c) attrs.push(/[,="]/.test(c) || c.startsWith("'") ? `"${c.replace(/"/g, "'")}"` : c);
+  for (const [k, v] of Object.entries(named)) {
+    if (k === 'caption' || v == null) continue;
+    attrs.push(`${k}=${/[, "]/.test(v) ? `"${String(v).replace(/"/g, "'")}"` : v}`);
+  }
+  return `model::${target}[${attrs.join(', ')}]`;
+}
+
+/** Put a model line in as its own block after 0-based line `after` (null: at the end) — past
+ *  the header, out of verbatim blocks, and not in the middle of a paragraph. */
+function insertModelLine(text, macro, after) {
+  const lines = text.replace(/\n$/, '').split('\n');
+  const live = liveLines(lines);
+  let start = 0;
+  while (start < lines.length && !lines[start].trim()) start++;
+  if ((lines[start] || '').startsWith('= ')) { start++; while (start < lines.length && lines[start].trim()) start++; }
+  let at = after == null ? lines.length : Math.min(Math.max(after + 1, start), lines.length);
+  while (at < lines.length && at > 0 && !live[at]) at++;
+  while (at < lines.length && at > start && lines[at - 1].trim() && lines[at].trim()) at++;
+  const before = lines.slice(0, at);
+  while (before.length > start && !before[before.length - 1].trim()) before.pop();
+  const rest = lines.slice(at);
+  while (rest.length && !rest[0].trim()) rest.shift();
+  const out = [...before, '', macro, ...(rest.length ? ['', ...rest] : [])];
+  return { text: out.join('\n') + '\n', line: before.length + 1 };
+}
+
+function removeModelLine(text, line) {
+  const lines = text.split('\n');
+  lines.splice(line, 1);
+  const blank = i => i >= 0 && i < lines.length && !lines[i].trim();
+  if (line > 0 && blank(line - 1) && (blank(line) || line >= lines.length - 1)) lines.splice(line - 1, 1);
+  return lines.join('\n');
+}
+
+function replaceLine(text, line, newLine) {
+  const lines = text.split('\n');
+  lines[line] = newLine + (lines[line].endsWith('\r') ? '\r' : '');
+  return lines.join('\n');
+}
+
+/** Select line `n` in the textarea and scroll to it. */
+function gotoLine(ta, n) {
+  const lines = ta.value.split('\n');
+  const from = lines.slice(0, n).reduce((a, l) => a + l.length + 1, 0);
+  ta.focus();
+  ta.setSelectionRange(from, from + (lines[n] || '').length);
+  const lh = parseFloat(getComputedStyle(ta).lineHeight) || 20;
+  ta.scrollTop = Math.max(0, n * lh - ta.clientHeight / 3);
+}
+
+let mediaCache = null;
+async function mediaLibrary(fresh) {
+  if (!mediaCache || fresh) mediaCache = await get('/media').catch(() => ({}));
+  return mediaCache;
+}
+
+async function renderPostModels(panel, ta, changed) {
+  const media = await mediaLibrary();
+  const list = postModelLines(ta.value);
+  panel.innerHTML = `
+    <div class="pm-head"><strong>3-D models in this post</strong>
+      <span class="muted small">${list.length ? 'Changes go into the text — Save to keep them.' : 'None yet.'}</span>
+      <span class="grow"></span>
+      <button class="primary" data-pm-add title="Pick a model; it goes in after the paragraph the cursor is in (or at the end)">Add model…</button></div>
+    ${list.map(e => {
+      const m = e.key ? media[e.key] : null;
+      const poster = m ? (m.poster || m.thumb) : '';
+      const bad = e.key && (!m || m.kind !== 'model');
+      const dl = e.named.download;
+      return `<div class="pm-row${bad ? ' bad' : ''}" data-i="${e.index}">
+        <span class="pm-thumb">${poster ? `<img src="/preview${esc(poster)}" alt="" loading="lazy" onerror="this.remove()">` : ''}</span>
+        <span class="pm-key mono" title="${esc(e.target)}${m && m.ids && m.ids.model ? ' — ' + esc(m.ids.model) : ''}">${esc(e.key || e.target)}${bad ? ' <span class="bad">(not in the media library)</span>' : ''}</span>
+        <input data-pm-caption value="${esc(e.caption)}" placeholder="${esc(m && m.caption ? m.caption : 'Caption')}" aria-label="Caption">
+        <select data-pm-download aria-label="Download" title="Offer readers the print file">
+          <option value="" ${dl == null ? 'selected' : ''}>Download: ${m && m.download ? 'yes (default)' : 'none (default)'}</option>
+          <option value="true" ${dl === 'true' ? 'selected' : ''} ${m && !m.download ? 'disabled' : ''}>Download: yes</option>
+          <option value="false" ${dl === 'false' ? 'selected' : ''}>Download: no</option>
+        </select>
+        <button data-pm-goto title="Show the line in the text">Line ${e.line + 1}</button>
+        <button data-pm-remove>Remove</button>
+      </div>`;
+    }).join('')}`;
+  const edit = (e, f) => { ta.value = f(ta.value, e); ta.dispatchEvent(new Event('input')); changed(); };
+  $$('.pm-row', panel).forEach(row => {
+    const e = list[Number(row.dataset.i)];
+    $('[data-pm-caption]', row).onchange = ev => edit(e, t => replaceLine(t, e.line, modelMacro(e.target, ev.target.value, e.named)));
+    $('[data-pm-download]', row).onchange = ev => edit(e, t => replaceLine(t, e.line, modelMacro(e.target, e.caption, { ...e.named, download: ev.target.value || null })));
+    $('[data-pm-goto]', row).onclick = () => gotoLine(ta, e.line);
+    $('[data-pm-remove]', row).onclick = () => edit(e, t => removeModelLine(t, e.line));
+  });
+  $('[data-pm-add]', panel).onclick = async () => {
+    const cursorLine = ta.selectionStart > 0 || document.activeElement === ta ? ta.value.slice(0, ta.selectionStart).split('\n').length - 1 : null;
+    const key = await pickModel();
+    if (!key) return;
+    const m = (await mediaLibrary(true))[key.key] || {};
+    const r = insertModelLine(ta.value, modelMacro(`media:${key.key}`, key.caption, key.download == null ? {} : { download: String(key.download) }), cursorLine);
+    ta.value = r.text;
+    ta.dispatchEvent(new Event('input'));
+    changed();
+    gotoLine(ta, r.line);
+    toast(`Added media:${key.key}${m.caption && !key.caption ? ` (${m.caption})` : ''} — Save to see it in the preview`);
+  };
+}
+
+/** Choose a model from the Meshy models repository (or the site's other 3-D media). Makes the
+ *  web model first when the site has none. Resolves to {key, caption, download} or null. */
+async function pickModel() {
+  const [lib, web, media] = await Promise.all([
+    get('/meshy/models').catch(e => ({ error: e.message, models: [], projects: [] })),
+    get('/site-models').catch(() => ({ web_models: {} })),
+    mediaLibrary(true),
+  ]);
+  const webModels = web.web_models || {};
+  const fromRepo = new Set(Object.values(webModels));
+  const others = Object.entries(media).filter(([k, m]) => m.kind === 'model' && !fromRepo.has(k));
+  const box = document.createElement('div');
+  document.body.appendChild(box);
+  let project = sessionStorage.getItem('gw-pick-project') || 'all', q = '';
+  return new Promise(resolve => {
+    const done = v => { box.remove(); document.removeEventListener('keydown', onKey); resolve(v); };
+    const onKey = e => { if (e.key === 'Escape') done(null); };
+    document.addEventListener('keydown', onKey);
+    const draw = () => {
+      const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+      const hit = s => words.every(w => s.toLowerCase().includes(w));
+      const shown = lib.models.filter(m => (project === 'all' || m.project === project) && hit(`${m.name} ${m.slug} ${m.project} ${m.summary || ''}`));
+      const otherShown = project === 'all' ? others.filter(([k, m]) => hit(`${k} ${m.caption || ''}`)) : [];
+      box.innerHTML = `<div class="model-backdrop" data-x></div><aside class="model-detail pick-model" role="dialog" aria-label="Add a 3-D model">
+        <div class="md-head"><div><h2>Add a 3-D model</h2><div class="muted small">Models with ✓ are ready for the web; others are made with Blender first (10–60 s).</div></div><button data-x>Close</button></div>
+        <div class="bar"><input data-q type="search" placeholder="Search models" value="${esc(q)}" style="flex:1;min-width:12rem">
+          <select data-p><option value="all">All projects</option>${lib.projects.map(p => `<option value="${esc(p.id)}" ${p.id === project ? 'selected' : ''}>${esc(p.id)} (${p.count})</option>`).join('')}</select></div>
+        ${lib.error ? `<p class="list problems">${esc(lib.error)}</p>` : ''}
+        <div class="model-grid pick-grid">${otherShown.map(([k, m]) => `
+          <button class="model-card" data-media="${esc(k)}"><div class="thumb">${m.poster ? `<img src="/preview${esc(m.poster)}" alt="" loading="lazy" onerror="this.remove()">` : '<span>3-D</span>'}</div>
+            <div class="body"><strong>${esc(m.caption || k)}</strong><div class="facts"><span class="pill published">✓ media:${esc(k)}</span></div></div></button>`).join('')}
+          ${shown.map(m => { const mk = webModels[`${m.project}/${m.slug}`]; return `
+          <button class="model-card" data-key="${esc(m.project)}/${esc(m.slug)}"><div class="thumb">${m.thumb ? `<img src="${meshyFile(m.thumb)}" alt="" loading="lazy">` : '<span>no image</span>'}</div>
+            <div class="body"><strong>${esc(m.name)}</strong><div class="facts">${mk ? `<span class="pill published" title="media:${esc(mk)}">✓ web model</span>` : '<span class="pill">needs web model</span>'}${project === 'all' ? `<span class="pill">${esc(m.project)}</span>` : ''}</div></div></button>`; }).join('') || (otherShown.length ? '' : '<p class="empty">No models match.</p>')}</div>
+      </aside>`;
+      $$('[data-x]', box).forEach(b => b.onclick = () => done(null));
+      const qi = $('[data-q]', box);
+      qi.oninput = () => { q = qi.value; const pos = qi.selectionStart; draw(); const n = $('[data-q]', box); n.focus(); n.setSelectionRange(pos, pos); };
+      $('[data-p]', box).onchange = e => { project = e.target.value; sessionStorage.setItem('gw-pick-project', project); draw(); };
+      $$('[data-media]', box).forEach(b => b.onclick = async () => {
+        const m = media[b.dataset.media] || {};
+        const v = await form(`Add media:${b.dataset.media}`, [
+          { name: 'caption', label: 'Caption', value: m.caption || '' },
+          { name: 'download', label: 'Download', type: 'select', value: '', options: [['', m.download ? 'Offer the print file (default)' : 'No download (default)'], ['false', 'No download']] },
+        ], 'Add');
+        if (v) done({ key: b.dataset.media, caption: v.caption === (m.caption || '') ? '' : v.caption, download: v.download === '' ? null : false });
+      });
+      $$('[data-key]', box).forEach(b => b.onclick = async () => {
+        const key = b.dataset.key, mk = webModels[key];
+        const info = lib.models.find(m => `${m.project}/${m.slug}` === key) || {};
+        const m = mk ? (media[mk] || {}) : {};
+        const v = await form(`Add “${info.name || key}”`, [
+          ...(mk ? [] : [{ type: 'note', text: 'The site has no web model for this yet: one is made now with Blender (a few MB GLB, a USDZ for AR on iPhone, a poster) in static/models/.' }]),
+          { name: 'caption', label: 'Caption', value: m.caption || info.name || '' },
+          { name: 'download', label: 'Download', type: 'select', value: mk ? '' : 'none',
+            options: mk ? [['', m.download ? 'Offer the print file (default)' : 'No download (default)'], ['false', 'No download']]
+                        : [['none', 'No download'], ['stl', 'Offer the print STL']] },
+        ], mk ? 'Add' : 'Make web model and add');
+        if (!v) return;
+        if (mk) return done({ key: mk, caption: v.caption === (m.caption || '') ? '' : v.caption, download: v.download === '' ? null : false });
+        b.disabled = true;
+        const t0 = Date.now();
+        const label = $('.body strong', b);
+        const tick = setInterval(() => { label.textContent = `Making web model… ${Math.round((Date.now() - t0) / 1000)} s`; }, 500);
+        try {
+          const r = await api('POST', '/media/model', { model: key, key: key.split('/')[1], download: v.download });
+          if (siteModels && siteModels.web_models) siteModels.web_models[key] = r.key;
+          done({ key: r.key, caption: v.caption, download: null });
+        } catch (e) {
+          toast(e.message, true);
+          label.textContent = info.name || key; b.disabled = false;
+        } finally { clearInterval(tick); }
+      });
+    };
+    draw();
+    $('[data-q]', box).focus();
+  });
 }
 
 // ---------------------------------------------------------------- Ideas
@@ -565,7 +820,11 @@ async function viewModels(rest = []) {
       <span class="grow"></span>
       ${filter !== 'all' ? `<button data-site-project="on" ${projOn === inProject.length ? 'disabled' : ''} title="Put every ${esc(filter)} model on the website">Show all ${inProject.length} on website</button>
         <button data-site-project="off" ${projOn ? '' : 'disabled'}>Hide all</button>` : '<span class="muted small">Pick a project to show or hide all of it.</span>'}
-      <a class="btn" href="/preview/models/" target="_blank" title="The gallery in the preview build (Build &amp; Publish → Build preview to refresh)">Gallery preview ↗</a>
+      ${web.home
+        ? `<a class="btn" href="#edit/${esc(web.home.id)}" title="The post that shows the gallery (models::gallery[]); /models/ sends readers there">Gallery article${web.home.draft ? ' (draft)' : ''}</a>
+           <a class="btn" href="/preview${esc(web.home.url)}" target="_blank" title="The gallery article in the preview build (Build &amp; Publish → Build preview to refresh)">Preview ↗</a>`
+        : `<button data-make-home title="Write an article that shows the whole gallery (models::gallery[]); /models/ then sends readers to it">Make gallery article…</button>
+           <a class="btn" href="/preview/models/" target="_blank" title="The gallery in the preview build (Build &amp; Publish → Build preview to refresh)">Gallery preview ↗</a>`}
     </div>
     ${web.error ? `<p class="list problems">${esc(web.error)}</p>` : ''}
     <div class="model-grid">${shown.map(m => {
@@ -580,7 +839,7 @@ async function viewModels(rest = []) {
             ${m.multi_part ? `<span class="pill warn">${esc(m.parts)} parts</span>` : ''}${filter === 'all' ? `<span class="pill">${esc(m.project)}</span>` : ''}
             ${w && w.viewer ? '<span class="pill published" title="Interactive 3-D viewer on the website">3-D</span>' : ''}</div></div>
         </a>
-        <label class="site-toggle" title="Show this model in the website's /models/ gallery"><input type="checkbox" data-site-toggle="${esc(k)}" ${w ? 'checked' : ''}> Show on website</label>
+        <label class="site-toggle" title="Show this model in the website's models gallery"><input type="checkbox" data-site-toggle="${esc(k)}" ${w ? 'checked' : ''}> Show on website</label>
       </div>`;
     }).join('') || '<p class="empty">No models here.</p>'}</div>
     <div data-detail></div>`;
@@ -588,6 +847,21 @@ async function viewModels(rest = []) {
   $$('[data-webfilter]').forEach(b => b.onclick = () => { sessionStorage.setItem('gw-models-web', b.dataset.webfilter); viewModels(rest); });
   $$('[data-site-toggle]').forEach(c => c.onchange = () => setOnSite([{ key: c.dataset.siteToggle, on: c.checked }], c, () => viewModels(rest)));
   $$('[data-site-project]').forEach(b => b.onclick = () => setOnSite([{ project: filter, on: b.dataset.siteProject === 'on' }], b, () => viewModels(rest)));
+  const mk = $('[data-make-home]');
+  if (mk) mk.onclick = async () => {
+    const v = await form('Make the gallery article', [
+      { type: 'note', text: 'A draft article with your introduction and the whole gallery under it (models::gallery[]). Its “updated” date follows the newest model you put on the website, and /models/ sends readers to it. Take Models out of the site menu (site.yaml nav) when you release it.' },
+      { name: 'title', label: 'Title', value: web.title || '3-D models', required: true },
+      { name: 'summary', label: 'Summary (cards and feeds)', value: web.intro || '' },
+      { name: 'intro', label: 'Introduction', type: 'textarea', rows: 5, value: web.intro || '' },
+    ], 'Create draft');
+    if (!v) return;
+    guard(async () => {
+      const r = await api('POST', '/items', { kind: 'article', title: v.title, summary: v.summary, body: `${v.intro.trim()}\n\nmodels::gallery[]\n` });
+      toast('Gallery article created (draft)');
+      location.hash = '#edit/' + r.item.id;
+    });
+  };
   const start = async (body, what) => guard(async () => {
     await api('POST', '/meshy/sync', body);
     toast(what);
@@ -656,6 +930,7 @@ async function showModel(project, slug) {
       ${m.multi_part ? `<span class="pill warn">${esc(m.parts)} parts on ${esc(m.plates || 1)} plate${m.plates > 1 ? 's' : ''}</span>` : '<span class="pill">single part</span>'}
       ${m.textured ? '<span class="pill">textured</span>' : ''}${m.watertight === false ? '<span class="pill">not watertight</span>' : ''}</div>
     <div class="bar site-detail" data-site-detail></div>
+    <div class="bar md-posts" data-posts></div>
     <div class="bar"><button data-reveal>Show in Finder</button>
       <button class="primary" data-add-site title="Make a web model (GLB + USDZ for AR + poster) in the site and register it as media:&lt;key&gt; for model::media:&lt;key&gt;[] — needs Blender">Add to site</button>
       <span class="muted small">Print: ${(m.print_files || []).map(f => `<code>${esc(f)}</code>`).join(', ') || '—'}${m.full_res_stl ? ` · full resolution (local only): <code>${esc(m.full_res_stl)}</code>` : ''}</span></div>
@@ -671,6 +946,7 @@ async function showModel(project, slug) {
   });
   $('[data-reveal]', box).onclick = () => guard(async () => { await api('POST', '/meshy/reveal', { project, slug }); });
   renderSiteDetail(box, project, slug);
+  renderModelPosts(box, project, slug, m.name);
   $('[data-add-site]', box).onclick = async () => {
     const hasStl = (m.print_files || []).some(f => f.endsWith('.stl'));
     const v = await form(`Add “${m.name}” to the site`, [
@@ -740,6 +1016,47 @@ async function renderSiteDetail(box, project, slug) {
       cb.disabled = false;
     }
     setOnSite([{ key, viewer: want }], cb, refresh);
+  };
+}
+
+/** "In posts" in a model's detail panel: the posts that show it (model::media:<key>[]), each
+ *  removable, and "Add to post…" (which makes the web model first when the site has none). */
+async function renderModelPosts(box, project, slug, name) {
+  const el = $('[data-posts]', box);
+  if (!el) return;
+  const key = `${project}/${slug}`;
+  const [web, usage] = await Promise.all([get('/site-models').catch(() => ({ web_models: {} })), get('/media/usage').catch(() => ({}))]);
+  const mk = (web.web_models || {})[key];
+  const posts = mk ? (usage[mk] || []) : [];
+  el.innerHTML = `<span class="muted small">In posts:</span>
+    ${posts.map(p => `<span class="pm-post"><a href="#edit/${esc(p.id)}">${esc(p.title)}</a>${p.draft ? ' <span class="pill">draft</span>' : ''}<button class="link" data-rm="${esc(p.id)}" title="Take it out of this post">✕</button></span>`).join('') || '<span class="muted small">none</span>'}
+    <button data-add-post>Add to post…</button>`;
+  $$('[data-rm]', el).forEach(b => b.onclick = async () => {
+    const p = posts.find(x => x.id === b.dataset.rm);
+    if (!(await ask('Take it out?', `Remove ${name} from “${p.title}”? (Only the model block goes; the post is saved.)`, 'Remove'))) return;
+    guard(async () => {
+      await api('POST', `/items/${enc(p.id)}/models`, { action: 'remove', model: mk });
+      toast(`Removed from “${p.title}”`);
+      renderModelPosts(box, project, slug, name);
+    });
+  });
+  $('[data-add-post]', el).onclick = async () => {
+    const items = (await get('/items')).filter(i => ['article', 'project', 'update', 'page'].includes(i.kind) && !posts.some(p => p.id === i.id));
+    const v = await form(`Show ${name} in a post`, [
+      { name: 'id', label: 'Post', type: 'select', value: '', options: items.map(i => [i.id, `${i.title} — ${i.kind}${i.draft ? ' (draft)' : ''}`]) },
+      { name: 'caption', label: 'Caption', value: name },
+      ...(mk ? [] : [{ type: 'note', text: 'The site has no web model for this yet: one is made now with Blender (10–60 s).' }]),
+      { name: 'download', label: 'Download', type: 'select', value: '', options: mk ? [['', 'As the media entry says'], ['false', 'No download']] : [['', 'No download'], ['true', 'Offer the print STL']] },
+    ], 'Add to the end of the post');
+    if (!v || !v.id) return;
+    const b = $('[data-add-post]', el);
+    b.disabled = true; b.textContent = mk ? 'Adding…' : 'Making the web model…';
+    try {
+      const r = await api('POST', `/items/${enc(v.id)}/models`, { action: 'add', model: key, caption: v.caption, download: v.download === '' ? undefined : v.download === 'true' });
+      toast(`Added to “${r.title}”`);
+      renderModelPosts(box, project, slug, name);
+      renderSiteDetail(box, project, slug);
+    } catch (e) { toast(e.message, true); b.disabled = false; b.textContent = 'Add to post…'; }
   };
 }
 

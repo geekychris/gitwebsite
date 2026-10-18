@@ -1,4 +1,4 @@
-// The 3-D models gallery (/models/ and /models/<project>/<slug>/). Everything here is an
+// The 3-D models gallery (/models/ or a post with models::gallery[], and /models/<project>/<slug>/). Everything here is an
 // enhancement: without it the grid links to each model's page and the views link to the images.
 // - a model's detail: the view thumbnails (and ← →) swap the big image; "3-D" shows the
 //   interactive <model-viewer>, whose script is fetched only then
@@ -91,6 +91,7 @@
   if (!dialog || typeof dialog.showModal !== 'function' || !window.fetch || !window.DOMParser) return;
   const body = dialog.querySelector('[data-mg-dialog-body]');
   const indexTitle = document.title;
+  const indexPath = location.pathname;   // /models/, or the post that shows the gallery
   let ctl = null, openUrl = null, opened = 0;
 
   async function open(url, push) {
@@ -122,7 +123,7 @@
   function close() {
     if (opened > 0 && history.state && history.state.mg) { history.go(-opened); opened = 0; return; }   // popstate hides it
     hide();
-    history.replaceState(null, '', '/models/' + location.hash);
+    history.replaceState(null, '', indexPath + location.hash);
   }
 
   index.addEventListener('click', e => {

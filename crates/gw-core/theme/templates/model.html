@@ -7,7 +7,7 @@
 <script type="module" src="{{ viewer_js }}"></script>{% endif %}{% endblock %}
 {% block main %}
 <div class="wrap block page-top mg mg-page">
-  <p class="mg-crumbs"><a href="/models/">{{ heading }}</a> <span aria-hidden="true">›</span> <a href="/models/#{{ m.project }}">{{ m.project_title }}</a></p>
+  <p class="mg-crumbs"><a href="{{ index_url }}">{{ heading }}</a> <span aria-hidden="true">›</span> <a href="{{ index_url }}#{{ m.project }}">{{ m.project_title }}</a></p>
   <article class="mg-detail" data-model-detail data-key="{{ m.key }}">
     <div class="mg-stage-col">
       <div class="mg-stage" data-mg-stage>
@@ -32,6 +32,7 @@
         {% if m.created_human %}<div><dt>Made</dt><dd>{{ m.created_human }}</dd></div>{% endif %}
       </dl>
       <div class="mg-desc">{{ m.description_html | safe }}</div>
+      {% if m.used_in %}<p class="mg-used">Appears in {% for u in m.used_in %}<a href="{{ u.url }}">{{ u.name }}</a>{% if not loop.last %}, {% endif %}{% endfor %}</p>{% endif %}
       <nav class="mg-pager" aria-label="More models">
         {% if m.prev %}<a rel="prev" href="{{ m.prev.url }}" data-mg-nav>← {{ m.prev.name }}</a>{% else %}<span></span>{% endif %}
         {% if m.next %}<a rel="next" href="{{ m.next.url }}" data-mg-nav>{{ m.next.name }} →</a>{% endif %}

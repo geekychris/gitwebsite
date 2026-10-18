@@ -13,6 +13,12 @@
 .mg-chip[aria-pressed="true"] span { color: color-mix(in srgb, var(--bg) 70%, transparent); }
 .mg-chip:focus-visible, .mg-card a:focus-visible, .mg-views a:focus-visible, .mg-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
+/* In a post (models::gallery[]): wider than the text column, and clear of its prose styles */
+.prose .mg-embed { position: relative; width: min(var(--max), calc(100vw - 2rem)); left: 50%; transform: translateX(-50%); margin: 1.6rem 0 2rem; }
+.prose .mg-embed .mg-grid { margin: 0; }
+.prose .mg-embed .mg-count { margin: 0 0 .8rem; }
+.mg-used { color: var(--muted); font-size: .95rem; }
+
 /* Grid */
 .mg-grid { list-style: none; margin: 0 0 2rem; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 1rem; }
 .mg-card[hidden] { display: none; }

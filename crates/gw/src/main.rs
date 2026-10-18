@@ -122,8 +122,8 @@ enum Cmd {
     /// Meshy.ai 3D models: sync the models repository, its status, the schedule in `gw serve`.
     #[command(subcommand)]
     Meshy(integrations::MeshyCmd),
-    /// The website's public 3-D models gallery (/models/): which Meshy models are on it (models.yaml)
-    /// and copying their pictures into the site (`sync-site`).
+    /// 3-D models on the website: the models gallery (which Meshy models are on it — models.yaml —
+    /// and copying their pictures into the site, `sync-site`) and the models in posts (in, add, remove).
     #[command(subcommand)]
     Models(integrations::site_models::ModelsCmd),
     /// Project stories: photos + notes + an interview → a post (see `/project-story`).
