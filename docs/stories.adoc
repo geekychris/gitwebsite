@@ -27,7 +27,10 @@ interview with Claude. Example: "Creating the Amiga 40th exhibit".
 . *Draft* — Claude writes the post in your voice. It refers to photos as `story:<id>`, and
   `gw story draft` turns those into real images: local photos are copied beside the post at most
   2000 px wide, re-encoded so EXIF (including GPS location) is removed, with portrait photos kept
-  upright; SmugMug photos become `media:<story>-<id>` keys served from SmugMug. The post is a
+  upright; SmugMug photos become `media:<story>-<id>` keys served from SmugMug. 3-D models join
+  a story from the media library (`gw story add <story> media:<model-key>`, after `gw media
+  add-model`) and go in as `model::story:<id>[Caption, download=true]`, which becomes
+  `model::media:<key>[…]`. The post is a
   draft; the preview opens at `http://127.0.0.1:8790/preview/...`.
 . *Release and publish* — only when you say so (`gw release …`, then the usual publish).
 

@@ -149,6 +149,9 @@ Write AsciiDoc in **their voice** (first person, concrete, plain; `docs/authorin
 image::story:img3[A long table of Amiga computers, each running a demo]
 ```
 
+A 3-D model in the story (added with `gw story add <slug> media:<model-key>`, its source is
+`media:` of kind model) goes in as `model::story:<id>[Caption, download=true]` on its own line.
+
 ```console
 gw story draft <slug> --file /tmp/story-draft.adoc
 ```

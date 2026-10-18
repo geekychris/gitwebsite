@@ -35,6 +35,18 @@ module; run `gw smugmug --help` for the exact list):
 3. **Embed** with `image::media:<key>[Alt]` / `video::media:<key>[]`, or use a key as `:hero:`.
 4. Existing SmugMug images can be registered by URL with `gw media add` as well.
 
+## 3-D models (Meshy models repository)
+
+1. **Make web assets** — `gw media add-model <project>/<slug> --download stl|3mf|none`
+   [`add_model`] (needs Blender; 10–60 s). It writes a decimated textured GLB (~2–3 MB), a USDZ
+   for iOS AR, a poster and the print file into `static/models/<key>/` and registers
+   `media:<key>`. Large STLs (>25 MB): add `--download-polycount 400000`. Find models with
+   `gw meshy models` [`meshy_models`]. The app: Models → a model → *Add to site*.
+2. **Embed** on its own line: `model::media:<key>[Caption, download=true]` (also `ar=`,
+   `autorotate=`, `height=480`, `reveal=interaction`). In a story draft: add it with
+   `gw story add <story> media:<key> --comment "…"`, then write `model::story:<id>[…]`.
+3. Commit `static/models/<key>/` with the post; `gw check` flags unknown or non-model keys.
+
 ## Rules
 
 - Always give images meaningful alt text.

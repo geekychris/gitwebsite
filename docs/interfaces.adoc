@@ -20,7 +20,7 @@ REST for scripts, MCP for Claude.
 | `gw areas` | The ontology
 | `gw idea list\|add\|set\|link` | The curation list
 | `gw registry list\|show\|put\|remove` | Provenance
-| `gw media list\|add` | The media library
+| `gw media list\|add\|add-model` | The media library (`add-model`: a 3-D model from the Meshy models repository)
 | `gw smugmug …`, `gw wordpress …`, `gw meshy …` | Integrations (see <<integrations.adoc#,Integrations>>)
 | `gw serve [--port 8790] [--open]` | REST API, UI, and preview
 | `gw mcp` | MCP server on stdio
@@ -58,6 +58,7 @@ served at `/preview/` (and at the site's own paths).
 | GET, POST | `/api/registry` | List, upsert
 | DELETE | `/api/registry/{id}` | Remove
 | GET, POST | `/api/media` | List, add (`key`, `url`, `kind`, `alt`, `caption`)
+| POST | `/api/media/model` | Make a Meshy model's web assets and register it (`model`, `key`, `download`, `polycount`, `download_polycount`, `force`)
 |===
 
 Errors are `{"error": "..."}` with a 4xx or 5xx status.
@@ -77,7 +78,7 @@ claude mcp add --scope user gitwebsite -- gw mcp
 Tools: `site_info`, `list_areas`, `list_content`, `get_content`, `create_content`,
 `update_content_source`, `set_status`, `check_site`, `build_site`, `publish_plan`,
 `publish_site`, `list_ideas`, `add_idea`, `update_idea`, `list_registry`,
-`upsert_registry_entry`, `list_media`, `add_media`. Tool descriptions carry the content
+`upsert_registry_entry`, `list_media`, `add_media`, `add_model`. Tool descriptions carry the content
 conventions, so a model can write correctly structured posts. `publish_site` requires
 `confirm: true` and tells the model to get the user's agreement first.
 

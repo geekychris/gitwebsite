@@ -818,7 +818,7 @@ pub fn models(ctx: &Ctx, project: Option<&str>) -> Result<Value> {
     Ok(json!({ "repo": repo.display().to_string(), "projects": projects, "count": shown.len(), "models": shown }))
 }
 
-fn safe_segment(s: &str) -> bool {
+pub(crate) fn safe_segment(s: &str) -> bool {
     !s.is_empty() && s != "." && s != ".." && !s.starts_with('.') && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
 }
 

@@ -389,6 +389,13 @@ async fn media_add(State(st): State<AppState>, Json(b): Json<MediaBody>) -> ApiR
     with_site(&st, move |s| ops::media_add(s, &b.key, b.media)).await
 }
 
+/// POST /api/media/model {model: "<project>/<slug>", key?, download: stl|3mf|none, polycount?,
+/// download_polycount?, max_texture?, draco?, no_usdz?, force?} — make a Meshy model's web
+/// assets into the site (Blender; takes ~10–30 s) and register media:<key>.
+async fn media_add_model(State(st): State<AppState>, Json(b): Json<crate::integrations::model_assets::AddModel>) -> ApiResult {
+    with_site(&st, move |s| crate::integrations::model_assets::add_model(s, &b)).await
+}
+
 async fn media_usage(State(st): State<AppState>) -> ApiResult {
     with_site(&st, ops::media_usage).await
 }
@@ -803,6 +810,12 @@ fn content_type(path: &Path) -> &'static str {
         "pdf" => "application/pdf",
         "txt" => "text/plain; charset=utf-8",
         "woff2" => "font/woff2",
+        // 3-D models (model::media:<key>[]): model-viewer, AR Quick Look and downloads.
+        "glb" => "model/gltf-binary",
+        "gltf" => "model/gltf+json",
+        "usdz" => "model/vnd.usdz+zip",
+        "stl" => "model/stl",
+        "3mf" => "model/3mf",
         _ => "application/octet-stream",
     }
 }
@@ -1064,6 +1077,7 @@ fn router_for(st: AppState) -> Router {
         .route("/api/registry/{id}", axum::routing::delete(registry_delete))
         .route("/api/media", get(media_list).post(media_add))
         .route("/api/media/usage", get(media_usage))
+        .route("/api/media/model", post(media_add_model))
         .route("/api/media/{key}/refresh", post(media_refresh))
         .route("/api/smugmug/album", get(smugmug_album))
         .route("/api/stories", get(stories_list).post(stories_create))

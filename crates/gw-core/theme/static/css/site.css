@@ -218,3 +218,22 @@ img { max-width: 100%; height: auto; }
 .group { margin: 0 0 2.2rem; }
 .group-title { font-size: 1.15rem; margin: 0 0 .8rem; padding-bottom: .35rem; border-bottom: 1px solid var(--line); }
 .group[hidden], .card[hidden] { display: none; }
+
+/* 3-D models: model::media:<key>[] → <figure class="model-figure"><model-viewer>… */
+.model-figure { margin: 1.8rem 0; }
+.model-figure model-viewer { display: block; width: 100%; height: var(--model-h, min(72vh, 30rem)); border-radius: var(--radius);
+  border: 1px solid var(--line); background: radial-gradient(120% 90% at 50% 25%, var(--surface), var(--wash));
+  --poster-color: transparent; --progress-bar-color: var(--accent); }
+.model-figure model-viewer:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.model-figure .model-poster { display: block; width: 100%; height: 100%; object-fit: contain; border-radius: var(--radius); }
+/* Before the component loads, or without JavaScript, the poster is all there is. */
+.model-figure model-viewer:not(:defined) { display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.model-figure figcaption { display: flex; flex-wrap: wrap; align-items: baseline; gap: .2rem .9rem; margin-top: .55rem; color: var(--muted); font-size: .9rem; }
+.model-figure .model-title { color: var(--ink); font-weight: 600; }
+.model-figure .model-download { font-weight: 600; white-space: nowrap; }
+.model-figure .model-bytes { font-weight: 400; color: var(--muted); }
+.model-figure .model-hint { flex-basis: 100%; color: var(--faint); font-size: .82rem; }
+.model-figure model-viewer:not(:defined) ~ figcaption .model-hint { display: none; }
+.model-figure.model-static img { border-radius: var(--radius); }
+.model-missing { padding: .8rem 1rem; border: 1px dashed var(--accent); border-radius: var(--radius); color: var(--accent-ink); }
+@media (max-width: 640px) { .model-figure model-viewer { height: var(--model-h, 62vh); max-height: 26rem; } }

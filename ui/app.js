@@ -373,27 +373,28 @@ async function viewMedia(filter) {
   filter = filter || sessionStorage.getItem('gw-media-filter') || 'all';
   const [lib, usage, album] = await Promise.all([get('/media'), get('/media/usage').catch(() => ({})), get('/smugmug/album').catch(() => ({}))]);
   const keys = Object.keys(lib).sort();
-  const pick = { all: () => true, video: m => m.kind === 'video', smugmug: m => m.provider === 'smugmug', unused: (m, k) => !(usage[k] || []).length };
+  const pick = { all: () => true, model: m => m.kind === 'model', video: m => m.kind === 'video', smugmug: m => m.provider === 'smugmug', unused: (m, k) => !(usage[k] || []).length };
   const shown = keys.filter(k => pick[filter](lib[k], k));
   const count = f => keys.filter(k => pick[f](lib[k], k)).length;
   const chip = (f, label) => `<button class="chip${f === filter ? ' on' : ''}" data-filter="${f}">${label} <span class="muted">${count(f)}</span></button>`;
   main.innerHTML = `
-    <h1>Media</h1><p class="sub">Images and video that content uses as <code>media:&lt;key&gt;</code> — files in the site, any URL, or SmugMug.</p>
+    <h1>Media</h1><p class="sub">Images, video and 3-D models that content uses as <code>media:&lt;key&gt;</code> — files in the site, any URL, or SmugMug. Add a 3-D model from <a href="#models">Models</a> (Add to site).</p>
     <div class="bar"><button class="primary" data-add>Add by URL</button>
       ${album.album_key ? `<span class="muted">Site media album on SmugMug (unlisted): ${album.web ? `<a href="${esc(album.web)}" target="_blank" rel="noopener">${esc(album.album_key)} ↗</a>` : esc(album.album_key)}</span>` : ''}
       <span class="muted">Upload: <code>gw smugmug upload &lt;file&gt;</code> or the MCP tools.</span></div>
-    <div class="bar">${chip('all', 'All')}${chip('video', 'Video')}${chip('smugmug', 'SmugMug')}${chip('unused', 'Not used yet')}</div>
+    <div class="bar">${chip('all', 'All')}${chip('video', 'Video')}${chip('model', '3-D models')}${chip('smugmug', 'SmugMug')}${chip('unused', 'Not used yet')}</div>
     <div class="media-grid">${shown.map(k => {
       const m = lib[k], ids = m.ids || {};
       const processing = m.provider === 'smugmug' && m.kind === 'video' && ids.note;
       const src = m.thumb || m.url;
       const thumb = m.kind === 'video' && !processing ? `<video src="${esc(m.url)}" poster="${esc(m.thumb || '')}" muted controls preload="none"></video>` : `<img src="${esc(src)}" alt="${esc(m.alt)}" loading="lazy">`;
-      const snippet = m.kind === 'video' ? `video::media:${k}[]` : `image::media:${k}[${m.alt || ''}]`;
+      const snippet = m.kind === 'video' ? `video::media:${k}[]` : m.kind === 'model' ? `model::media:${k}[${m.caption || ''}${m.download ? ', download=true' : ''}]` : `image::media:${k}[${m.alt || ''}]`;
+      const modelFacts = m.kind === 'model' ? `<br><span class="muted small">${[m.triangles && `${Number(m.triangles).toLocaleString()} triangles`, m.bytes && `GLB ${fmtBytes(m.bytes)}`, m.ios && `USDZ ${fmtBytes(m.ios_bytes || 0)}`, m.download && `download ${fmtBytes(m.download_bytes || 0)}`, (m.ids || {}).model].filter(Boolean).map(esc).join(' · ')}</span>` : '';
       const used = usage[k] || [];
       const page = ids.web_uri || (m.provider === 'smugmug' ? m.url : '');
       return `<div class="tile"><div class="thumb">${thumb}</div><div class="meta"><strong>${esc(k)}</strong>
         <span class="pill">${esc(m.provider)}</span> <span class="pill">${esc(m.kind)}</span>${processing ? ' <span class="pill warn">processing on SmugMug</span>' : ''}<br>
-        <code>${esc(snippet)}</code><br><button data-copy="${esc(snippet)}">Copy snippet</button>
+        <code>${esc(snippet)}</code>${modelFacts}<br><button data-copy="${esc(snippet)}">Copy snippet</button>
         ${page ? ` <a href="${esc(page)}" target="_blank" rel="noopener">SmugMug page ↗</a>` : ''}
         ${m.provider === 'smugmug' ? ` <button data-refresh="${esc(k)}" title="Look it up on SmugMug again (e.g. once a video has finished processing)">Refresh</button>` : ''}
         <div class="muted">${used.length ? 'Used in ' + used.map(u => `<a href="#edit/${encodeURIComponent(u.id)}">${esc(u.title)}</a>${u.draft ? ' (draft)' : ''}`).join(', ') : 'Not used in any page yet'}</div></div></div>`;
@@ -609,6 +610,7 @@ async function showModel(project, slug) {
       ${m.multi_part ? `<span class="pill warn">${esc(m.parts)} parts on ${esc(m.plates || 1)} plate${m.plates > 1 ? 's' : ''}</span>` : '<span class="pill">single part</span>'}
       ${m.textured ? '<span class="pill">textured</span>' : ''}${m.watertight === false ? '<span class="pill">not watertight</span>' : ''}</div>
     <div class="bar"><button data-reveal>Show in Finder</button>
+      <button class="primary" data-add-site title="Make a web model (GLB + USDZ for AR + poster) in the site and register it as media:&lt;key&gt; for model::media:&lt;key&gt;[] — needs Blender">Add to site</button>
       <span class="muted small">Print: ${(m.print_files || []).map(f => `<code>${esc(f)}</code>`).join(', ') || '—'}${m.full_res_stl ? ` · full resolution (local only): <code>${esc(m.full_res_stl)}</code>` : ''}</span></div>
     ${local.length ? `<p class="muted small">Local only (not in git): ${local.map(f => `<code>${esc(f.name)}</code> ${fmtBytes(f.bytes)}`).join(', ')}</p>` : ''}
     <div class="md-readme">${miniMarkdown(m.readme || m.description || '', m.dir)}</div>
@@ -621,6 +623,34 @@ async function showModel(project, slug) {
     $$('[data-view]', box).forEach(x => x.classList.toggle('on', x === b));
   });
   $('[data-reveal]', box).onclick = () => guard(async () => { await api('POST', '/meshy/reveal', { project, slug }); });
+  $('[data-add-site]', box).onclick = async () => {
+    const hasStl = (m.print_files || []).some(f => f.endsWith('.stl'));
+    const v = await form(`Add “${m.name}” to the site`, [
+      { type: 'note', text: 'Makes a decimated, textured web model (a few MB), a USDZ for AR on iPhone/iPad and a poster in static/models/<key>/ with Blender (10–60 s), and registers media:<key>.' },
+      { name: 'key', label: 'Media key', value: slug, required: true },
+      { name: 'download', label: 'Offer readers a download', type: 'select', value: hasStl ? 'stl' : 'none',
+        options: [['stl', 'The print STL' + (hasStl ? '' : ' (none in the repository)')], ['3mf', 'The 3MF'], ['none', 'No download']] },
+      { name: 'download_polycount', label: 'Shrink the STL to this many triangles (optional; ≈50 bytes each)', placeholder: 'e.g. 400000' },
+      { name: 'polycount', label: 'Web model triangles', value: '150000' },
+    ], 'Add to site');
+    if (!v) return;
+    const b = $('[data-add-site]', box);
+    b.disabled = true; b.textContent = 'Working…';
+    guard(async () => {
+      try {
+        const r = await api('POST', '/media/model', {
+          model: `${project}/${slug}`, key: v.key.trim(), download: v.download,
+          polycount: Number(v.polycount) || 150000,
+          download_polycount: v.download_polycount.trim() ? Number(v.download_polycount) : null,
+        });
+        const f = r.files || {};
+        const sizes = [['web GLB', f.glb], ['USDZ', f.usdz], ['download', f.download]].filter(([, x]) => x && x.bytes).map(([n, x]) => `${n} ${fmtBytes(x.bytes)}`).join(', ');
+        const snippet = `model::media:${r.key}[${r.media.caption || ''}]`;
+        navigator.clipboard?.writeText(snippet).catch(() => {});
+        toast(`Added media:${r.key} (${sizes}) — copied ${snippet}${(r.warnings || []).length ? ' · ' + r.warnings.join(' · ') : ''}`);
+      } finally { b.disabled = false; b.textContent = 'Add to site'; }
+    });
+  };
 }
 
 /** A count of newly arrived models beside "Models" in the sidebar. */

@@ -484,7 +484,16 @@ fn crosspost(site: &Site, id: &str, status: &str) -> Result<Value> {
     }
     let auth = load_auth()?;
     let raw = std::fs::read_to_string(&it.path)?;
-    let text = site.media()?.expand(&raw)?;
+    let lib = site.media()?;
+    // WordPress runs no page scripts: 3-D models go over as their poster and a download link.
+    let raw = gw_core::model::expand(&raw, &gw_core::model::Env {
+        lib: Some(&lib),
+        bundle_dir: it.bundle_dir.as_deref(),
+        static_dir: Some(&site.static_dir()),
+        static_html: true,
+    })
+    .text;
+    let text = lib.expand(&raw)?;
     let mut attrs = BTreeMap::new();
     attrs.insert("site-url".into(), site.config.site.base_url.clone());
     let html = render_one(

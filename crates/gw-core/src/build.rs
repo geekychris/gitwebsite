@@ -203,9 +203,18 @@ pub fn build(site: &Site, opts: &BuildOptions) -> Result<BuildReport> {
     let items: Vec<Item> = all.into_iter().filter(|i| opts.drafts || !i.draft).collect();
 
     // Render every item's body in one Asciidoctor run.
+    let st_dir = site.static_dir();
     let mut docs = vec![];
     for it in &items {
         let raw = std::fs::read_to_string(&it.path)?;
+        // 3-D models first (they become passthrough HTML), then media:<key> references.
+        let models = crate::model::expand(&raw, &crate::model::Env {
+            lib: Some(&media),
+            bundle_dir: it.bundle_dir.as_deref(),
+            static_dir: Some(&st_dir),
+            static_html: false,
+        });
+        let raw = if models.count > 0 || !models.problems.is_empty() { models.text } else { raw };
         let text = media.expand(&raw).unwrap_or(raw);
         let mut attrs = BTreeMap::new();
         attrs.insert("site-url".into(), cfg.site.base_url.clone());
