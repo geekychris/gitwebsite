@@ -15,6 +15,15 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.10.0/styles/github.min.css" media="(prefers-color-scheme: light)">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.10.0/styles/github-dark.min.css" media="(prefers-color-scheme: dark)">
 <link rel="icon" href="/images/favicon.svg" type="image/svg+xml">
+{% if analytics_id %}<script>
+if (!/^(localhost|127\.|\[::1\])/.test(location.hostname)) {
+  var s = document.createElement('script'); s.async = true; s.src = 'https://www.googletagmanager.com/gtag/js?id={{ analytics_id }}'; document.head.appendChild(s);
+  window.dataLayer = window.dataLayer || [];
+  window.gtag = function () { window.dataLayer.push(arguments); };
+  gtag('js', new Date());
+  gtag('config', '{{ analytics_id }}');
+}
+</script>{% endif %}
 </head>
 <body class="{% block body_class %}{% endblock %}">
 <header class="top">

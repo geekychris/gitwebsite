@@ -78,6 +78,20 @@ pub struct Identity {
     pub description: String,
     #[serde(default)]
     pub links: Vec<NavItem>,
+    /// Google Analytics 4 measurement id (`G-XXXXXXXXXX`). When set, every page gets the gtag.js
+    /// snippet; it does nothing when the page is served from localhost (previews).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub google_analytics: Option<String>,
+}
+
+impl Identity {
+    /// The Google Analytics id if it is a well-formed GA4 measurement id (`G-` then 4–20 capitals or
+    /// digits), so nothing else can reach the page's script.
+    pub fn analytics_id(&self) -> Option<&str> {
+        self.google_analytics.as_deref().map(str::trim).filter(|id| {
+            id.strip_prefix("G-").map_or(false, |r| (4..=20).contains(&r.len()) && r.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()))
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -213,4 +227,23 @@ pub fn expand_home(p: &str) -> PathBuf {
         }
     }
     PathBuf::from(p)
+}
+
+#[cfg(test)]
+mod analytics_tests {
+    use super::*;
+
+    fn ident(id: Option<&str>) -> Identity {
+        Identity { title: "t".into(), tagline: String::new(), base_url: "https://x".into(), author: "a".into(),
+                   description: String::new(), links: vec![], google_analytics: id.map(String::from) }
+    }
+
+    #[test]
+    fn only_well_formed_ga4_ids_are_used() {
+        assert_eq!(ident(Some("G-9MEREPHRBX")).analytics_id(), Some("G-9MEREPHRBX"));
+        assert_eq!(ident(Some(" G-9MEREPHRBX ")).analytics_id(), Some("G-9MEREPHRBX"));
+        assert_eq!(ident(Some("UA-1234-1")).analytics_id(), None);
+        assert_eq!(ident(Some("G-abc');alert(1)//")).analytics_id(), None);
+        assert_eq!(ident(None).analytics_id(), None);
+    }
 }
