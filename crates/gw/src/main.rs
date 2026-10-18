@@ -119,6 +119,9 @@ enum Cmd {
     /// WordPress: import posts and cross-post.
     #[command(subcommand)]
     Wordpress(integrations::WordpressCmd),
+    /// Meshy.ai 3D models: sync the models repository, its status, the schedule in `gw serve`.
+    #[command(subcommand)]
+    Meshy(integrations::MeshyCmd),
     /// Project stories: photos + notes + an interview → a post (see `/project-story`).
     #[command(subcommand)]
     Story(StoryCmd),
@@ -681,6 +684,13 @@ fn main() -> Result<()> {
             print(j, &v);
             return Ok(());
         }
+        Cmd::Meshy(c) => {
+            let v = integrations::meshy::run_cli(c, j)?;
+            if !v.is_null() {
+                print(j, &v);
+            }
+            return Ok(());
+        }
         Cmd::Init { .. } | Cmd::Config(_) => {
             let v = match cli.cmd {
                 Cmd::Init { dir, title, author, base_url, tagline, description, pages_repo, branch, pages_checkout, no_theme_copy, no_starter, git, create_pages_repo, no_current } => {
@@ -712,7 +722,7 @@ fn main() -> Result<()> {
     }
     let site = Site::open(cli.site.as_deref())?;
     let v = match cli.cmd {
-        Cmd::Serve { .. } | Cmd::Init { .. } | Cmd::Config(_) | Cmd::Companion(_) => unreachable!(),
+        Cmd::Serve { .. } | Cmd::Init { .. } | Cmd::Config(_) | Cmd::Companion(_) | Cmd::Meshy(_) => unreachable!(),
         Cmd::Tools(c) => {
             let v = companion_cli::run_tools(&site.root, &site.config.site.base_url, c)?;
             if v.is_null() {

@@ -204,6 +204,14 @@ fn tools() -> Value {
          "inputSchema": s(json!({"id": str_("Window id")}), &["id"])},
         {"name": "companion_status", "description": "The gitwebsite app and its companion gateway: running or not, its port, the relays (HTTP upstreams, TCP allow-list, Docker socket, Kubernetes contexts, git hosts, LAN hosts, wss allow-list, S3 profiles), paired tools, pending pairing requests and first-use approvals, which secrets are present (never values).",
          "inputSchema": s(json!({}), &[])},
+        {"name": "meshy_status", "description": "Meshy.ai model sync: the models repository, last sync (time, result, new models), next scheduled sync, credit balance, model count, new models available free, expired models not recovered and what recovering them would cost. Read-only.",
+         "inputSchema": s(json!({}), &[])},
+        {"name": "meshy_sync", "description": "Start a sync of the Meshy models repository (runs its tools/sync in the background; follow it with meshy_status). Without recover it is free: it downloads new models still inside Meshy's 3-day window. recover=true PAYS to recover expired models (5 credits each) and needs max_credits, the most it may spend — only with the user's explicit go-ahead for that amount. dry_run=true only looks.",
+         "inputSchema": s(json!({"recover": {"type": "boolean", "description": "Spend credits recovering expired models (needs max_credits and the user's consent)"},
+            "max_credits": {"type": "integer", "minimum": 1, "description": "With recover: the most credits this run may spend"},
+            "dry_run": {"type": "boolean", "description": "List and plan only; change nothing"}}), &[])},
+        {"name": "meshy_models", "description": "The 3D models in the Meshy models repository: project, slug, name, description, created, triangle count, print dimensions (mm), parts (multi-part models come on build plates), image paths, folder. Give project to filter, or project+slug for one model with its full README.",
+         "inputSchema": s(json!({"project": str_("Project id, e.g. amiga"), "slug": str_("Model slug (with project): one model in full")}), &[])},
         {"name": "add_media", "description": "Register an image or video URL (or site path like /images/x.jpg) under a key, for use as image::media:<key>[] or video::media:<key>[].",
          "inputSchema": s(json!({"key": str_("Letters, digits, - _ ."), "url": str_("Absolute URL or site path"),
             "kind": {"type": "string", "enum": ["image", "video"]}, "alt": str_("Alt text"), "caption": str_("Caption")}), &["key", "url"])},
@@ -218,6 +226,9 @@ fn req<'a>(a: &'a Value, k: &str) -> Result<&'a str> {
 }
 
 fn call(root: &PathBuf, name: &str, a: &Value) -> Result<Value> {
+    if let Some(v) = call_meshy(name, a) {
+        return v;
+    }
     let site = Site::open(Some(root))?;
     match name {
         "site_info" => Ok(json!({
@@ -393,6 +404,45 @@ fn tool_open(site: &Site, a: &Value) -> Result<Value> {
     }
 }
 
+/// The Meshy tools, which need no site. `None` for any other tool.
+fn call_meshy(name: &str, a: &Value) -> Option<Result<Value>> {
+    use crate::integrations::meshy;
+    let run = || -> Result<Value> {
+        let ctx = meshy::Ctx::load()?;
+        match name {
+            "meshy_status" => meshy::status(&ctx, true),
+            "meshy_models" => match (sv(a, "project"), sv(a, "slug")) {
+                (Some(p), Some(s)) => meshy::model(&ctx, p, s),
+                (p, None) => meshy::models(&ctx, p),
+                (None, Some(_)) => bail!("give project with slug"),
+            },
+            _ => {
+                let opts = meshy::SyncOptions {
+                    recover: a.get("recover").and_then(|v| v.as_bool()).unwrap_or(false),
+                    max_credits: a.get("max_credits").and_then(|v| v.as_u64()),
+                    dry_run: a.get("dry_run").and_then(|v| v.as_bool()).unwrap_or(false),
+                };
+                opts.validate()?;
+                // In the running app when there is one, so its Models page shows the progress;
+                // otherwise in this process, in the background.
+                match crate::appclient::send("POST", "/api/meshy/sync", &serde_json::to_value(&opts)?) {
+                    Ok(mut v) => {
+                        v["in"] = json!("app");
+                        Ok(v)
+                    }
+                    Err(e) if format!("{e:#}").contains("not running") => {
+                        let mut v = meshy::spawn_sync(ctx, opts, "mcp")?;
+                        v["in"] = json!("mcp");
+                        Ok(v)
+                    }
+                    Err(e) => Err(e),
+                }
+            }
+        }
+    };
+    matches!(name, "meshy_status" | "meshy_sync" | "meshy_models").then(run)
+}
+
 /// "Mona Octocat's website, “Octo's notes” (https://octocat.github.io)", from site.yaml.
 fn whose_site(root: &std::path::Path) -> String {
     match Site::open(Some(root)) {
@@ -491,11 +541,15 @@ mod tests {
                 assert!(props.contains_key(r.as_str().unwrap()), "{name}: required {r} not in properties");
             }
         }
-        for n in ["tools_list", "tool_info", "tool_open", "tool_windows", "tool_close", "tool_screenshot", "companion_status"] {
+        for n in ["tools_list", "tool_info", "tool_open", "tool_windows", "tool_close", "tool_screenshot", "companion_status", "meshy_status", "meshy_sync", "meshy_models"] {
             assert!(names.contains(n), "missing {n}");
         }
         let open = list.iter().find(|t| t["name"] == "tool_open").unwrap();
         assert_eq!(open["inputSchema"]["required"], json!(["slug"]));
         assert_eq!(open["inputSchema"]["properties"]["params"]["type"], "object");
+        // Recovering spends credits: never without an explicit max_credits.
+        let e = call_meshy("meshy_sync", &json!({"recover": true})).unwrap().unwrap_err().to_string();
+        assert!(e.contains("max_credits"), "{e}");
+        assert!(call_meshy("list_content", &json!({})).is_none());
     }
 }

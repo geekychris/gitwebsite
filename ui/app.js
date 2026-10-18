@@ -421,6 +421,216 @@ async function viewMedia(filter) {
   };
 }
 
+// ---------------------------------------------------------------- Models (Meshy.ai)
+
+const meshyFile = p => '/api/meshy/file?path=' + encodeURIComponent(p);
+let meshyPoll = null;   // the live-log timer while a sync runs
+function stopMeshyPoll() { if (meshyPoll) { clearTimeout(meshyPoll); meshyPoll = null; } }
+
+/** "3 h ago", "in 20 h" (and the local date/time as a tooltip). */
+function relTime(iso) {
+  if (!iso) return '—';
+  const t = new Date(iso), d = (Date.now() - t) / 60000;
+  const a = Math.abs(d);
+  const s = a < 1 ? 'now' : a < 90 ? `${Math.round(a)} min` : a < 48 * 60 ? `${Math.round(a / 60)} h` : `${Math.round(a / 1440)} days`;
+  return s === 'now' ? 'just now' : d >= 0 ? `${s} ago` : `in ${s}`;
+}
+const fmtTris = n => n == null ? '' : n >= 1e6 ? `${(n / 1e6).toFixed(1)} M` : n >= 1e3 ? `${Math.round(n / 1e3)} k` : String(n);
+const fmtDims = d => Array.isArray(d) ? d.map(x => Math.round(x)).join(' × ') + ' mm' : '';
+const fmtBytes = n => n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : n >= 1e6 ? `${Math.round(n / 1e6)} MB` : n >= 1e3 ? `${Math.round(n / 1e3)} kB` : `${n} B`;
+
+/** The model READMEs are simple Markdown (headings, paragraphs, lists, tables, images, links,
+ *  `code`, **bold**). Images and links inside the model folder are resolved against it. */
+function miniMarkdown(md, dir) {
+  const inline = s => esc(s)
+    .replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (_, alt, src) => /^https?:/.test(src) ? `<img src="${src}" alt="${alt}">`
+      : `<img src="${meshyFile(dir + '/' + src.replace(/^\.\//, ''))}" alt="${alt}" loading="lazy">`)
+    .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_, text, href) => /^https?:/.test(href) ? `<a href="${href}" target="_blank" rel="noopener">${text}</a>` : text)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[\s(])_([^_]+)_(?=[\s).,;:]|$)/g, '$1<em>$2</em>');
+  const out = [], lines = md.split('\n');
+  for (let i = 0; i < lines.length;) {
+    const l = lines[i];
+    if (!l.trim()) { i++; continue; }
+    let m;
+    if ((m = l.match(/^(#{1,4})\s+(.*)/))) { const n = Math.min(m[1].length + 1, 4); out.push(`<h${n}>${inline(m[2])}</h${n}>`); i++; continue; }
+    if (l.startsWith('|')) {
+      const rows = [];
+      while (i < lines.length && lines[i].startsWith('|')) rows.push(lines[i++]);
+      const cells = r => r.replace(/^\||\|$/g, '').split('|').map(c => c.trim());
+      const body = rows.filter(r => !/^\|[\s:|-]+\|$/.test(r));
+      const head = cells(body.shift() || '');
+      const hasHead = head.some(Boolean);
+      out.push(`<div class="md-table"><table>${hasHead ? `<tr>${head.map(c => `<th>${inline(c)}</th>`).join('')}</tr>` : ''}${body.map(r => `<tr>${cells(r).map(c => `<td>${inline(c)}</td>`).join('')}</tr>`).join('')}</table></div>`);
+      continue;
+    }
+    if (/^\s*[-*]\s/.test(l)) {
+      const items = [];
+      while (i < lines.length && /^\s*[-*]\s/.test(lines[i])) items.push(lines[i++].replace(/^\s*[-*]\s/, ''));
+      out.push(`<ul>${items.map(x => `<li>${inline(x)}</li>`).join('')}</ul>`);
+      continue;
+    }
+    if (l.startsWith('```')) {
+      const code = []; i++;
+      while (i < lines.length && !lines[i].startsWith('```')) code.push(lines[i++]);
+      i++; out.push(`<pre class="mono">${esc(code.join('\n'))}</pre>`); continue;
+    }
+    if (l.startsWith('>')) {
+      const q = [];
+      while (i < lines.length && lines[i].startsWith('>')) q.push(lines[i++].replace(/^>\s?/, ''));
+      out.push(`<blockquote>${inline(q.join(' '))}</blockquote>`); continue;
+    }
+    const p = [];
+    while (i < lines.length && lines[i].trim() && !/^(#|\||\s*[-*]\s|```|>)/.test(lines[i])) p.push(lines[i++]);
+    out.push(`<p>${inline(p.join(' '))}</p>`);
+  }
+  return out.join('\n');
+}
+
+async function viewModels(rest = []) {
+  stopMeshyPoll();
+  const filter = sessionStorage.getItem('gw-models-project') || 'all';
+  const [st, lib] = await Promise.all([
+    get('/meshy/status'),
+    get('/meshy/models').catch(e => ({ error: e.message, models: [], projects: [] })),
+  ]);
+  markModelsNav(st);
+  const shown = lib.models.filter(m => filter === 'all' || m.project === filter);
+  const last = st.last_sync, run = st.running;
+  const lastText = last ? `${relTime(last.finished || last.started)}` : 'never';
+  const lastNote = last ? (last.ok ? `ok · ${(last.summary || {}).new || 0} new · ${esc(last.trigger)}` : `<span class="bad">${esc(last.error || 'failed')}</span>`) : 'no sync recorded yet';
+  const next = !st.enabled ? 'off' : !st.repo_ok ? '—' : (new Date(st.next_due) <= Date.now() ? 'due now' : relTime(st.next_due));
+  const chip = (id, label, n) => `<button class="chip${id === filter ? ' on' : ''}" data-project="${esc(id)}">${esc(label)} <span class="muted">${n}</span></button>`;
+  const needs = st.expired_needing_remesh || 0, cost = st.recover_cost || 0;
+  main.innerHTML = `
+    <h1>Models</h1>
+    <p class="sub">3D models made with Meshy.ai, kept in the git repository <span class="mono">${esc(st.repo || '(none)')}</span>.
+      New models are downloaded free while Meshy keeps them (about 3 days); the app checks every ${esc(st.interval_hours)} h.</p>
+    ${st.repo_ok ? '' : `<p class="list problems">${esc(st.repo_error || 'No models repository.')} — set one with <code>gw meshy config --repo &lt;path&gt;</code>.</p>`}
+    <div class="cards meshy-stats">
+      <div class="stat"><b title="${esc(last ? new Date(last.finished || last.started).toLocaleString() : '')}">${lastText}</b>Last sync — ${lastNote}</div>
+      <div class="stat"><b title="${esc(st.next_due ? new Date(st.next_due).toLocaleString() : '')}">${next}</b>Next scheduled sync${st.enabled ? ` (every ${esc(st.interval_hours)} h)` : ' — <code>gw meshy config --enable</code>'}</div>
+      <div class="stat"><b>${st.balance ?? '?'}</b>${st.balance == null ? `Credit balance unknown <span class="muted small">${esc(st.balance_error || '')}</span>` : 'Meshy credits'}</div>
+      <div class="stat"><b>${st.models}</b>models${st.new_available ? ` · <strong>${st.new_available}</strong> new on Meshy` : ''}</div>
+    </div>
+    <div class="bar">
+      <button class="primary" data-sync ${run || !st.repo_ok ? 'disabled' : ''}>${run ? 'Syncing…' : 'Sync now'}</button>
+      <button data-dry ${run || !st.repo_ok ? 'disabled' : ''} title="List what is waiting on Meshy; change nothing">Check Meshy</button>
+      <span class="muted small">Free: only downloads models still inside Meshy's download window.</span>
+      <span class="grow"></span>
+      <button data-log>Last log</button>
+    </div>
+    ${st.unseen_new ? `<div class="meshy-banner ok-banner"><div><strong>${st.unseen_new} new model${st.unseen_new === 1 ? '' : 's'} arrived</strong>
+      <div class="muted small">${st.unseen_models.map(m => `<a href="#models/${encodeURIComponent(m.project)}/${encodeURIComponent(m.slug)}">${esc(m.name)}</a>`).join(', ')}</div></div>
+      <button data-seen>Dismiss</button></div>` : ''}
+    ${st.expired_unrecovered ? `<div class="meshy-banner warn-banner"><div><strong>Expired — ${st.expired_unrecovered} model${st.expired_unrecovered === 1 ? '' : 's'} not recovered</strong>
+      <div class="muted small">Meshy's free download links ran out before these were synced. ${(st.expired_models || []).map(m => esc(m.name)).join(', ')}</div></div>
+      ${needs ? `<button data-recover>Recover ${needs} model${needs === 1 ? '' : 's'} (${needs}×${st.remesh_cost} = ${cost} credits)</button>` : `<button data-recover-free title="These already have a paid conversion; collecting them is free">Collect them (free)</button>`}</div>` : ''}
+    <div data-progress ${run ? '' : 'hidden'}><h2>Sync in progress</h2><pre class="list claude-log" data-logtext></pre></div>
+    ${lib.error ? `<p class="list problems">${esc(lib.error)}</p>` : ''}
+    <div class="bar">${chip('all', 'All', lib.models.length)}${lib.projects.map(p => chip(p.id, p.id, p.count)).join('')}</div>
+    ${filter !== 'all' ? `<p class="muted small">${esc((lib.projects.find(p => p.id === filter) || {}).description || '')}</p>` : ''}
+    <div class="model-grid">${shown.map(m => `
+      <a class="model-card" href="#models/${encodeURIComponent(m.project)}/${encodeURIComponent(m.slug)}">
+        <div class="thumb">${m.thumb ? `<img src="${meshyFile(m.thumb)}" alt="" loading="lazy">` : '<span>no image</span>'}</div>
+        <div class="body"><strong>${esc(m.name)}</strong>
+          <p>${esc(m.summary || m.first_line || '')}</p>
+          <div class="facts"><span>${esc(fmtDims(m.dimensions_mm))}</span>${m.triangles ? `<span>${fmtTris(m.triangles)} tris</span>` : ''}
+            ${m.multi_part ? `<span class="pill warn">${esc(m.parts)} parts</span>` : ''}${filter === 'all' ? `<span class="pill">${esc(m.project)}</span>` : ''}</div></div>
+      </a>`).join('') || '<p class="empty">No models here.</p>'}</div>
+    <div data-detail></div>`;
+  $$('[data-project]').forEach(b => b.onclick = () => { sessionStorage.setItem('gw-models-project', b.dataset.project); viewModels(rest); });
+  const start = async (body, what) => guard(async () => {
+    await api('POST', '/meshy/sync', body);
+    toast(what);
+    viewModels(rest);
+  });
+  $('[data-sync]').onclick = () => start({}, 'Sync started');
+  $('[data-dry]').onclick = () => start({ dry_run: true }, 'Checking Meshy…');
+  $('[data-log]').onclick = () => showMeshyLog();
+  const seen = $('[data-seen]');
+  if (seen) seen.onclick = () => guard(async () => { await api('POST', '/meshy/seen'); viewModels(rest); });
+  const rec = $('[data-recover]');
+  if (rec) rec.onclick = async () => {
+    const bal = st.balance;
+    const ok = await form(`Spend ${cost} Meshy credits?`, [
+      { type: 'note', text: `Recovering ${needs} expired model${needs === 1 ? '' : 's'} costs ${st.remesh_cost} credits each: ${cost} credits in all. ` +
+        `${bal != null ? `Your balance is ${bal} credits; afterwards about ${bal - cost}. ` : ''}` +
+        `The sync never spends more than ${cost} credits in this run and stops before the balance would fall below 250. Credits spent are not refunded.` },
+    ], `Spend up to ${cost} credits`);
+    if (ok) start({ recover: true, max_credits: cost }, `Recovering — up to ${cost} credits`);
+  };
+  const free = $('[data-recover-free]');
+  if (free) free.onclick = () => start({}, 'Sync started');
+  if (run) followMeshyLog(rest);
+  if (rest.length >= 2) showModel(decodeURIComponent(rest[0]), decodeURIComponent(rest[1]));
+}
+
+/** While a sync runs, append its log to the page; reload the page when it ends. */
+async function followMeshyLog(rest, offset = 0, runId = null) {
+  const box = $('[data-logtext]');
+  if (!box || !location.hash.startsWith('#models')) return stopMeshyPoll();
+  try {
+    const l = await get(`/meshy/log?offset=${offset}${runId ? '&run=' + encodeURIComponent(runId) : ''}`);
+    if (l.text) { box.textContent += l.text; box.scrollTop = box.scrollHeight; }
+    if (!l.running) {
+      const r = l.record;
+      const n = r && r.summary ? r.summary.new : 0;
+      toast(r ? (r.ok ? (r.dry_run ? `Checked: ${r.summary ? r.summary.available_free : 0} new on Meshy, ${r.summary ? r.summary.expired : 0} expired` : `Sync done: ${n} new model${n === 1 ? '' : 's'}`) : 'Sync failed: ' + (r.error || '')) : 'Sync finished', r && !r.ok);
+      return viewModels(rest);
+    }
+    meshyPoll = setTimeout(() => followMeshyLog(rest, l.offset, l.run), 1500);
+  } catch (e) { meshyPoll = setTimeout(() => followMeshyLog(rest, offset, runId), 4000); }
+}
+
+async function showMeshyLog() {
+  const l = await get('/meshy/log').catch(e => ({ text: e.message }));
+  const box = $('[data-detail]');
+  box.innerHTML = `<div class="model-detail" role="dialog" aria-label="Sync log"><div class="md-head"><h2>Sync log ${l.run ? `<span class="muted small mono">${esc(l.run)}</span>` : ''}</h2><button data-close>Close</button></div>
+    <pre class="list claude-log meshy-log">${esc(l.text || 'No sync has run yet.')}</pre></div>`;
+  $('[data-close]', box).onclick = () => (box.innerHTML = '');
+}
+
+async function showModel(project, slug) {
+  const box = $('[data-detail]');
+  if (!box) return;
+  const m = await get(`/meshy/models/${encodeURIComponent(project)}/${encodeURIComponent(slug)}`).catch(e => ({ error: e.message }));
+  if (m.error) return toast(m.error, true);
+  const imgs = m.images.filter(i => i.name !== 'thumb');
+  const main0 = m.hero || (imgs[0] || {}).path;
+  const local = (m.files || []).filter(f => !f.in_git);
+  box.innerHTML = `<div class="model-backdrop" data-close></div><aside class="model-detail" role="dialog" aria-label="${esc(m.name)}">
+    <div class="md-head"><div><h2>${esc(m.name)}</h2><div class="muted small">${esc(m.project)} · <span class="mono">${esc(m.slug)}</span>${m.created ? ` · made ${esc(String(m.created).slice(0, 10))}` : ''}</div></div>
+      <button data-close aria-label="Close">Close</button></div>
+    <div class="md-hero">${main0 ? `<img data-big src="${meshyFile(main0)}" alt="${esc(m.name)}">` : ''}</div>
+    <div class="md-views">${imgs.map(i => `<button data-view="${esc(i.path)}" class="${i.path === main0 ? 'on' : ''}" title="${esc(i.name)}"><img src="${meshyFile(i.path)}" alt="${esc(i.name)}" loading="lazy"><span>${esc(i.name)}</span></button>`).join('')}</div>
+    <div class="facts big"><span>${esc(fmtDims(m.dimensions_mm))}</span>${m.triangles ? `<span>${Number(m.triangles).toLocaleString()} triangles</span>` : ''}
+      ${m.multi_part ? `<span class="pill warn">${esc(m.parts)} parts on ${esc(m.plates || 1)} plate${m.plates > 1 ? 's' : ''}</span>` : '<span class="pill">single part</span>'}
+      ${m.textured ? '<span class="pill">textured</span>' : ''}${m.watertight === false ? '<span class="pill">not watertight</span>' : ''}</div>
+    <div class="bar"><button data-reveal>Show in Finder</button>
+      <span class="muted small">Print: ${(m.print_files || []).map(f => `<code>${esc(f)}</code>`).join(', ') || '—'}${m.full_res_stl ? ` · full resolution (local only): <code>${esc(m.full_res_stl)}</code>` : ''}</span></div>
+    ${local.length ? `<p class="muted small">Local only (not in git): ${local.map(f => `<code>${esc(f.name)}</code> ${fmtBytes(f.bytes)}`).join(', ')}</p>` : ''}
+    <div class="md-readme">${miniMarkdown(m.readme || m.description || '', m.dir)}</div>
+  </aside>`;
+  const close = () => { box.innerHTML = ''; if (location.hash !== '#models') history.replaceState(null, '', '#models'); };
+  $$('[data-close]', box).forEach(b => b.onclick = close);
+  document.onkeydown = e => { if (e.key === 'Escape') close(); };
+  $$('[data-view]', box).forEach(b => b.onclick = () => {
+    $('[data-big]', box).src = meshyFile(b.dataset.view);
+    $$('[data-view]', box).forEach(x => x.classList.toggle('on', x === b));
+  });
+  $('[data-reveal]', box).onclick = () => guard(async () => { await api('POST', '/meshy/reveal', { project, slug }); });
+}
+
+/** A count of newly arrived models beside "Models" in the sidebar. */
+function markModelsNav(st) {
+  const a = $('[data-section="models"]');
+  if (!a) return;
+  const n = st && st.unseen_new || 0;
+  a.innerHTML = 'Models' + (n ? ` <span class="nav-badge" title="${n} new model${n === 1 ? '' : 's'} from Meshy">${n}</span>` : '');
+}
+
 // ---------------------------------------------------------------- Build & publish
 
 async function viewPublish() {
@@ -1847,7 +2057,7 @@ function auditEvent(e) {
   return esc(e.event);
 }
 
-const routes = { companion: viewCompanion, content: viewContent, stories: viewStories, ideas: viewIdeas, registry: viewRegistry, media: viewMedia, publish: viewPublish, preview: viewPreview, sites: viewSites };
+const routes = { companion: viewCompanion, content: viewContent, stories: viewStories, ideas: viewIdeas, registry: viewRegistry, media: viewMedia, models: viewModels, publish: viewPublish, preview: viewPreview, sites: viewSites };
 
 async function route() {
   const h = location.hash.replace(/^#/, '') || 'content';
@@ -1857,6 +2067,7 @@ async function route() {
   document.onpaste = null;
   document.onkeydown = null;
   if (!(section === 'story' && live && live.slug === rest[0] && !rest[1])) stopLive();
+  if (section !== 'models') stopMeshyPoll();
   main.innerHTML = '<p class="muted">Loading…</p>';
   try {
     if (section === 'edit') await viewEditor(decodeURIComponent(rest.join('/')));
@@ -1867,6 +2078,7 @@ async function route() {
       if (subName === 'smugmug') await viewSmugmugPicker(slug, new URLSearchParams(query || '').get('target') || '');
       else await viewStory(slug);
     }
+    else if (section === 'models') await viewModels(rest);
     else await (routes[section] || viewContent)();
   } catch (e) {
     if (isNoSite(e) && section !== 'sites') { location.hash = '#sites'; return; }
@@ -1875,6 +2087,9 @@ async function route() {
 }
 
 window.addEventListener('hashchange', route);
+// Newly arrived Meshy models show as a count beside Models (checked now and every 10 minutes).
+const refreshModelsNav = () => get('/meshy/status').then(markModelsNav).catch(() => {});
+refreshModelsNav(); setInterval(refreshModelsNav, 600000);
 showSiteHeader();
 // With no site yet, start on the setup screen.
 refreshSiteSwitch().then(showing => { if (!showing && location.hash !== '#sites') location.hash = '#sites'; else route(); });

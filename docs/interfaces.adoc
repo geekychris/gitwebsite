@@ -21,7 +21,7 @@ REST for scripts, MCP for Claude.
 | `gw idea list\|add\|set\|link` | The curation list
 | `gw registry list\|show\|put\|remove` | Provenance
 | `gw media list\|add` | The media library
-| `gw smugmug …`, `gw wordpress …` | Integrations (see <<integrations.adoc#,Integrations>>)
+| `gw smugmug …`, `gw wordpress …`, `gw meshy …` | Integrations (see <<integrations.adoc#,Integrations>>)
 | `gw serve [--port 8790] [--open]` | REST API, UI, and preview
 | `gw mcp` | MCP server on stdio
 | `gw publish [--dry-run] [--no-push] [-y] [-m msg]` | Publish to GitHub Pages
