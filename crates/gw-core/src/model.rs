@@ -68,26 +68,38 @@ fn verbatim_delimiter(line: &str) -> Option<&str> {
     None
 }
 
-/// Replace every `model::…[…]` line (outside listing/literal/comment/passthrough blocks).
-pub fn expand(text: &str, env: &Env) -> Expanded {
-    let mut out = Expanded::default();
-    let mut lines: Vec<String> = Vec::new();
+/// The lines of `text` (with their line endings) and, for each, whether it is AsciiDoc a block
+/// macro may stand on — false inside listing/literal/comment/passthrough blocks and on their
+/// delimiters.
+pub fn macro_lines(text: &str) -> Vec<(&str, bool)> {
+    let mut out = vec![];
     let mut open: Option<String> = None;
     for line in text.split_inclusive('\n') {
         let bare = line.trim_end_matches(['\n', '\r']);
         if let Some(d) = &open {
-            if bare.trim_end() == d || (d == "```" && bare.trim_end() == "```") {
+            if bare.trim_end() == d {
                 open = None;
             }
-            lines.push(line.to_string());
+            out.push((line, false));
             continue;
         }
         if let Some(d) = verbatim_delimiter(bare) {
             open = Some(d.to_string());
-            lines.push(line.to_string());
+            out.push((line, false));
             continue;
         }
-        let Some(c) = macro_re().captures(bare) else {
+        out.push((line, true));
+    }
+    out
+}
+
+/// Replace every `model::…[…]` line (outside listing/literal/comment/passthrough blocks).
+pub fn expand(text: &str, env: &Env) -> Expanded {
+    let mut out = Expanded::default();
+    let mut lines: Vec<String> = Vec::new();
+    for (line, live) in macro_lines(text) {
+        let bare = line.trim_end_matches(['\n', '\r']);
+        let Some(c) = live.then(|| macro_re().captures(bare)).flatten() else {
             lines.push(line.to_string());
             continue;
         };
@@ -106,6 +118,173 @@ pub fn expand(text: &str, env: &Env) -> Expanded {
     }
     out.text = lines.concat();
     out
+}
+
+// ------------------------------------------------------------------ editing a post's models
+
+/// One `model::` line in a post, as the editor and `gw models in` list them.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct Embed {
+    /// 0-based among the post's models, in order.
+    pub index: usize,
+    /// 1-based line number in the file.
+    pub line: usize,
+    /// `media:<key>`, a path or a URL.
+    pub target: String,
+    /// The media key, for `media:<key>` targets.
+    pub key: Option<String>,
+    pub caption: String,
+    /// `download=` as written (absent: the entry's default).
+    pub download: Option<String>,
+    /// The attribute list as written (between the brackets).
+    pub attrs: String,
+}
+
+/// The post's `model::` lines, in order (verbatim blocks skipped, as [`expand`] does).
+pub fn embeds(text: &str) -> Vec<Embed> {
+    let mut out = vec![];
+    for (n, (line, live)) in macro_lines(text).into_iter().enumerate() {
+        let bare = line.trim_end_matches(['\n', '\r']);
+        let Some(c) = live.then(|| macro_re().captures(bare)).flatten() else { continue };
+        let (pos, named) = parse_attrs(&c[2]);
+        out.push(Embed {
+            index: out.len(),
+            line: n + 1,
+            target: c[1].to_string(),
+            key: c[1].strip_prefix("media:").map(str::to_string),
+            caption: pos.first().cloned().or_else(|| named.get("caption").cloned()).unwrap_or_default(),
+            download: named.get("download").cloned(),
+            attrs: c[2].to_string(),
+        });
+    }
+    out
+}
+
+/// A caption as a positional attribute: quoted when it holds a comma, a quote or `=`, and never
+/// with a `]` (which would end the macro).
+fn caption_attr(caption: &str) -> String {
+    let c = caption.trim().replace(']', ")").replace(['\n', '\r'], " ");
+    if c.contains([',', '=', '"']) || c.starts_with('\'') {
+        format!("\"{}\"", c.replace('"', "'"))
+    } else {
+        c
+    }
+}
+
+/// `model::media:<key>[Caption, download=false]`. `download`: `None` leaves the entry's default.
+pub fn macro_line(key: &str, caption: &str, download: Option<bool>) -> String {
+    let mut attrs = vec![];
+    if !caption.trim().is_empty() {
+        attrs.push(caption_attr(caption));
+    }
+    if let Some(d) = download {
+        attrs.push(format!("download={d}"));
+    }
+    format!("model::media:{key}[{}]", attrs.join(", "))
+}
+
+/// Where [`insert`] puts a new model.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Place {
+    /// At the end of the post.
+    End,
+    /// After this 1-based line (the header's lines move it past the header).
+    After(usize),
+}
+
+/// The 1-based line of the first body line: after `= Title` and the attribute lines.
+fn body_start(lines: &[&str]) -> usize {
+    let mut i = 0;
+    while i < lines.len() && lines[i].trim().is_empty() {
+        i += 1;
+    }
+    if i < lines.len() && lines[i].starts_with("= ") {
+        i += 1;
+        while i < lines.len() && !lines[i].trim().is_empty() {
+            i += 1;
+        }
+    }
+    i
+}
+
+/// Put `macro_text` (a `model::…[]` line) in the post as its own block: a blank line before and
+/// after it. After a line inside a verbatim block, it goes after that block instead.
+pub fn insert(text: &str, macro_text: &str, place: Place) -> String {
+    let ml = macro_lines(text);
+    let lines: Vec<&str> = ml.iter().map(|(l, _)| l.trim_end_matches(['\n', '\r'])).collect();
+    let start = body_start(&lines);
+    let mut at = match place {
+        Place::End => lines.len(),
+        Place::After(n) => n.clamp(start, lines.len()),
+    };
+    // Not inside a verbatim block (or between its delimiters).
+    while at < lines.len() && at > 0 && !ml[at].1 {
+        at += 1;
+    }
+    // Not in the middle of a paragraph: move to the end of it.
+    while at < lines.len() && at > start && !lines[at - 1].trim().is_empty() && !lines[at].trim().is_empty() {
+        at += 1;
+    }
+    let mut out: Vec<String> = lines[..at].iter().map(|s| s.to_string()).collect();
+    while out.len() > start && out.last().is_some_and(|l| l.trim().is_empty()) {
+        out.pop();
+    }
+    out.push(String::new());
+    out.push(macro_text.trim().to_string());
+    let rest: Vec<&str> = lines[at..].iter().copied().skip_while(|l| l.trim().is_empty()).collect();
+    if !rest.is_empty() {
+        out.push(String::new());
+        out.extend(rest.iter().map(|s| s.to_string()));
+    }
+    let mut s = out.join("\n");
+    s.push('\n');
+    s
+}
+
+/// Take out the model at `index` (see [`embeds`]) and the blank line it leaves behind.
+pub fn remove(text: &str, index: usize) -> anyhow::Result<String> {
+    let e = embeds(text).into_iter().find(|e| e.index == index).ok_or_else(|| anyhow::anyhow!("the post has no model #{}", index + 1))?;
+    let mut lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let i = e.line - 1;
+    lines.remove(i);
+    // Two blank lines meet (or the file now ends in one): drop one.
+    let blank = |l: Option<&&str>| l.is_some_and(|l| l.trim().is_empty());
+    if i > 0 && blank(lines.get(i - 1)) && (blank(lines.get(i)) || i == lines.len()) {
+        lines.remove(i - 1);
+    }
+    Ok(lines.concat())
+}
+
+/// Rewrite the model at `index` with a new caption and/or download setting (other attributes
+/// are kept). `download`: `Some(None)` removes `download=`.
+pub fn update(text: &str, index: usize, caption: Option<&str>, download: Option<Option<bool>>) -> anyhow::Result<String> {
+    let e = embeds(text).into_iter().find(|e| e.index == index).ok_or_else(|| anyhow::anyhow!("the post has no model #{}", index + 1))?;
+    let (pos, mut named) = parse_attrs(&e.attrs);
+    let caption = caption.map(str::to_string).unwrap_or_else(|| pos.first().cloned().unwrap_or_default());
+    named.remove("caption");
+    match download {
+        Some(Some(d)) => {
+            named.insert("download".into(), d.to_string());
+        }
+        Some(None) => {
+            named.remove("download");
+        }
+        None => {}
+    }
+    let mut attrs = vec![];
+    if !caption.trim().is_empty() {
+        attrs.push(caption_attr(&caption));
+    }
+    // Further positional attributes are not used by the macro; named ones are kept as written.
+    for (k, v) in &named {
+        let v = if v.contains([',', ' ', '"']) { format!("\"{}\"", v.replace('"', "'")) } else { v.clone() };
+        attrs.push(format!("{k}={v}"));
+    }
+    let new = format!("model::{}[{}]", e.target, attrs.join(", "));
+    let mut lines: Vec<String> = text.split_inclusive('\n').map(str::to_string).collect();
+    let eol = if lines[e.line - 1].ends_with("\r\n") { "\r\n" } else if lines[e.line - 1].ends_with('\n') { "\n" } else { "" };
+    lines[e.line - 1] = format!("{new}{eol}");
+    Ok(lines.concat())
 }
 
 /// The `<figure class="model-figure">` with a `<model-viewer>` for library model `key`, without
@@ -587,6 +766,54 @@ mod tests {
         let e = expand("model::media:wiz[]\n", &Env { lib: Some(&l), static_html: true, ..Default::default() });
         assert!(!e.text.contains("<model-viewer") && !e.text.contains("<script"));
         assert!(e.text.contains("<a href=\"/models/wiz/wizard-lemming-plate.stl\"><img src=\"/models/wiz/poster.webp\""));
+    }
+
+    const POST: &str = "= Lemmings\n:type: project\n:date: 2026-10-01\n\nIntro paragraph\nstill intro.\n\nmodel::media:wiz[Wizard, download=false]\n\n----\nmodel::media:not-this[]\n----\n\n== More\n\nmodel::media:plain[]\n";
+
+    #[test]
+    fn lists_embeds() {
+        let e = embeds(POST);
+        assert_eq!(e.len(), 2, "the one in the listing block is not a model");
+        assert_eq!((e[0].index, e[0].line, e[0].key.as_deref(), e[0].caption.as_str(), e[0].download.as_deref()), (0, 8, Some("wiz"), "Wizard", Some("false")));
+        assert_eq!((e[1].index, e[1].line, e[1].key.as_deref(), e[1].caption.as_str()), (1, 16, Some("plain"), ""));
+    }
+
+    #[test]
+    fn inserts_as_own_block() {
+        let line = macro_line("gino", "Gino, the first", Some(true));
+        assert_eq!(line, "model::media:gino[\"Gino, the first\", download=true]");
+        assert_eq!(macro_line("x", "a]b", None), "model::media:x[a)b]");
+        // At the end.
+        let t = insert(POST, &line, Place::End);
+        assert!(t.ends_with("model::media:plain[]\n\nmodel::media:gino[\"Gino, the first\", download=true]\n"), "{t}");
+        assert_eq!(embeds(&t).len(), 3);
+        // After a line in the middle of a paragraph → after the paragraph.
+        let t = insert(POST, "model::media:gino[]", Place::After(5));
+        assert!(t.contains("still intro.\n\nmodel::media:gino[]\n\nmodel::media:wiz["), "{t}");
+        // Inside the header → first thing in the body.
+        let t = insert(POST, "model::media:gino[]", Place::After(1));
+        assert!(t.starts_with("= Lemmings\n:type: project\n:date: 2026-10-01\n\nmodel::media:gino[]\n\nIntro paragraph"), "{t}");
+        // Inside a listing block → after it.
+        let t = insert(POST, "model::media:gino[]", Place::After(11));
+        assert!(t.contains("----\nmodel::media:not-this[]\n----\n\nmodel::media:gino[]\n\n== More"), "{t}");
+        assert_eq!(embeds(&t).iter().map(|e| e.key.clone().unwrap()).collect::<Vec<_>>(), ["wiz", "gino", "plain"]);
+    }
+
+    #[test]
+    fn removes_and_updates() {
+        let t = remove(POST, 0).unwrap();
+        assert!(t.contains("still intro.\n\n----\n"), "{t}");
+        assert_eq!(embeds(&t).len(), 1);
+        let t = remove(POST, 1).unwrap();
+        assert!(t.ends_with("== More\n"), "{t:?}");
+        assert!(remove(POST, 5).is_err());
+        let t = update(POST, 0, Some("The wizard, again"), Some(None)).unwrap();
+        assert!(t.contains("\nmodel::media:wiz[\"The wizard, again\"]\n"), "{t}");
+        let t = update(POST, 1, None, Some(Some(true))).unwrap();
+        assert!(t.contains("\nmodel::media:plain[download=true]\n"), "{t}");
+        let t = update("model::media:wiz[Wiz, height=480, orbit=\"30deg 75deg 105%\"]\n", 0, Some("W"), None).unwrap();
+        assert_eq!(t, "model::media:wiz[W, height=480, orbit=\"30deg 75deg 105%\"]\n");
+        assert!(run(&t).problems.is_empty());
     }
 
     #[test]

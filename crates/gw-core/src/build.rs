@@ -5,7 +5,8 @@
 //!   `app`, `playground`)
 //! - `/articles/`, `/projects/`, `/areas/` and `/areas/<path>/`, `/tags/<tag>/`, `/lab/`
 //! - `/publications/` from registry entries of kind `publication`
-//! - `/models/` and `/models/<project>/<slug>/`: the 3-D models gallery (see [`crate::gallery`])
+//! - `/models/<project>/<slug>/`: the 3-D models gallery's model pages, and `/models/`: its grid,
+//!   or — when a post has a `models::gallery[]` block — a redirect to that post (see [`crate::gallery`])
 //! - `feed.xml` (Atom), `sitemap.xml`, `search.json`, `robots.txt`, `404.html`
 //!
 //! Drafts are left out unless `drafts` is set (for local preview). Unlisted items are built
@@ -203,11 +204,70 @@ pub fn build(site: &Site, opts: &BuildOptions) -> Result<BuildReport> {
     let all = site.items()?;
     let items: Vec<Item> = all.into_iter().filter(|i| opts.drafts || !i.draft).collect();
 
-    // Render every item's body in one Asciidoctor run.
+    // Templates.
+    // The built-in theme first; the site's own templates/ replace files of the same name.
+    let mut tera = Tera::default();
+    tera.add_raw_templates(crate::theme::TEMPLATES.iter().map(|(n, t)| (n.to_string(), t.to_string())).collect::<Vec<_>>())
+        .context("loading the built-in templates")?;
+    let tdir = site.templates_dir();
+    if tdir.is_dir() {
+        let mut own = vec![];
+        for e in WalkDir::new(&tdir).min_depth(1) {
+            let e = e?;
+            let rel = e.path().strip_prefix(&tdir)?.to_string_lossy().replace('\\', "/");
+            if e.file_type().is_file() && !rel.split('/').any(|c| c.starts_with('.')) {
+                own.push((e.path().to_path_buf(), Some(rel)));
+            }
+        }
+        tera.add_template_files(own).with_context(|| format!("loading templates from {}", tdir.display()))?;
+    }
+    tera.autoescape_on(vec![".html", ".xml"]);
+    // Tera's default escaper also rewrites '/' as &#x2F;, which makes every URL unreadable.
+    tera.set_escape_fn(escape_html);
+
+    // The 3-D models gallery (models.yaml + static/model-gallery/), shown at /models/ or, when a
+    // post has a models::gallery[] block, in that post ("the gallery's home").
     let st_dir = site.static_dir();
+    let gallery = crate::gallery::Gallery::load(&site.root)?.filter(|g| !g.models.is_empty());
+    // Its problems are already among the warnings (from `site.check()`).
+    let mut gpages = gallery.as_ref().map(|g| crate::gallery::pages(g, &st_dir, &media, &cfg.site.base_url, &mut vec![])).filter(|p| !p.cards.is_empty());
+    let mut gallery_home: Option<&Item> = None;
+    // The media keys of the models each post shows (for "Appears in" on the model pages).
+    let mut shows_models: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    // Posts showing the gallery: the grid is their picture, so the hero is not repeated above it.
+    let mut shows_gallery: BTreeSet<String> = BTreeSet::new();
+
+    // Render every item's body in one Asciidoctor run.
     let mut docs = vec![];
     for it in &items {
         let raw = std::fs::read_to_string(&it.path)?;
+        shows_models.insert(it.id.clone(), crate::model::embeds(&raw).into_iter().filter_map(|e| e.key).collect());
+        // The models gallery block (a passthrough of models_grid.html).
+        let gallery_blocks = crate::gallery::embeds(&raw);
+        let raw = if gallery_blocks.is_empty() {
+            raw
+        } else {
+            shows_gallery.insert(it.id.clone());
+            if gallery_home.is_none() && gallery_blocks.iter().any(|e| matches!(e, Ok(e) if e.project.is_none())) {
+                gallery_home = Some(it);
+            }
+            let (text, problems) = crate::gallery::expand(&raw, |e| {
+                let Some(gp) = &gpages else { anyhow::bail!("no models on the website yet (models.yaml; `gw models on`)") };
+                let gp = match &e.project {
+                    Some(p) => crate::gallery::only_project(gp, p),
+                    None => gp.clone(),
+                };
+                let mut c = Ctx::new();
+                c.insert("cards", &gp.cards);
+                c.insert("projects", &gp.projects);
+                c.insert("show_chips", &(e.chips && e.project.is_none()));
+                c.insert("embedded", &true);
+                let grid = tera.render("models_grid.html", &c).context("rendering models_grid.html")?;
+                Ok(format!("<link rel=\"stylesheet\" href=\"/css/models.css\">\n{grid}\n<script src=\"/js/models.js\" defer></script>"))
+            });
+            warnings.extend(problems.into_iter().map(|p| format!("{}: {p}", it.id)));
+            text
+        };
         // 3-D models first (they become passthrough HTML), then media:<key> references.
         let models = crate::model::expand(&raw, &crate::model::Env {
             lib: Some(&media),
@@ -235,9 +295,22 @@ pub fn build(site: &Site, opts: &BuildOptions) -> Result<BuildReport> {
     let area_titles: BTreeMap<String, String> =
         cfg.flat_areas().into_iter().map(|(p, a)| (p, a.title)).collect();
 
+    let living = gallery_home.map(|h| h.id.clone()).zip(gallery.as_ref().and_then(|g| crate::gallery::latest_change(g, &st_dir)));
     let view = |it: &Item| -> View {
+        let mut it = it.clone();
+        if let Some((_, d)) = living.as_ref().filter(|(id, _)| *id == it.id) {
+            if it.date.is_none_or(|x| *d > x) && it.updated.is_none_or(|x| *d > x) {
+                it.updated = Some(*d);
+            }
+        }
+        let it = &it;
         let body = html.get(&it.id).cloned().unwrap_or_default();
-        let words = strip_tags(&body).split_whitespace().count();
+        // Reading time is for the text: a models gallery's cards are left out.
+        let prose = match (body.find("<div class=\"mg mg-embed\""), body.rfind("</dialog>")) {
+            (Some(a), Some(b)) if b > a => format!("{}{}", &body[..a], &body[b..]),
+            _ => body.clone(),
+        };
+        let words = strip_tags(&prose).split_whitespace().count();
         let area_links = it
             .areas
             .iter()
@@ -251,7 +324,7 @@ pub fn build(site: &Site, opts: &BuildOptions) -> Result<BuildReport> {
             .map(|p| (p.title.clone(), p.url.clone()))
             .unwrap_or_default();
         let hero = hero_url(it, &media);
-        let hero_in_body = !hero.is_empty() && body.contains(hero.rsplit('/').next().unwrap_or(&hero));
+        let hero_in_body = !hero.is_empty() && (body.contains(hero.rsplit('/').next().unwrap_or(&hero)) || shows_gallery.contains(&it.id));
         View {
             item: it.clone(),
             kind_label: kind_label(it.kind),
@@ -330,27 +403,6 @@ pub fn build(site: &Site, opts: &BuildOptions) -> Result<BuildReport> {
     }
     let counter = |p: &str| listed.iter().filter(|v| v.item.kind != Kind::Page && in_area(v, p)).count();
     let areas_tree = tree("", &cfg.areas, &counter);
-
-    // Templates.
-    // The built-in theme first; the site's own templates/ replace files of the same name.
-    let mut tera = Tera::default();
-    tera.add_raw_templates(crate::theme::TEMPLATES.iter().map(|(n, t)| (n.to_string(), t.to_string())).collect::<Vec<_>>())
-        .context("loading the built-in templates")?;
-    let tdir = site.templates_dir();
-    if tdir.is_dir() {
-        let mut own = vec![];
-        for e in WalkDir::new(&tdir).min_depth(1) {
-            let e = e?;
-            let rel = e.path().strip_prefix(&tdir)?.to_string_lossy().replace('\\', "/");
-            if e.file_type().is_file() && !rel.split('/').any(|c| c.starts_with('.')) {
-                own.push((e.path().to_path_buf(), Some(rel)));
-            }
-        }
-        tera.add_template_files(own).with_context(|| format!("loading templates from {}", tdir.display()))?;
-    }
-    tera.autoescape_on(vec![".html", ".xml"]);
-    // Tera's default escaper also rewrites '/' as &#x2F;, which makes every URL unreadable.
-    tera.set_escape_fn(escape_html);
 
     let base = |path: &str, title: &str, noindex: bool| -> Ctx {
         let mut c = Ctx::new();
@@ -504,28 +556,46 @@ pub fn build(site: &Site, opts: &BuildOptions) -> Result<BuildReport> {
         write("tools/index.html", tera.render("tools.html", &c)?, &mut files)?;
     }
 
-    // The 3-D models gallery (models.yaml + static/model-gallery/): /models/ and one page per model.
+    // The 3-D models gallery: one page per model, and /models/ (the grid, or a redirect to the
+    // gallery's home post).
     let mut gallery_urls: Vec<String> = vec![];
-    if let Some(g) = crate::gallery::Gallery::load(&site.root)?.filter(|g| !g.models.is_empty()) {
-        // Its problems are already among the warnings (from `site.check()`).
-        let gp = crate::gallery::pages(&g, &st_dir, &media, &cfg.site.base_url, &mut vec![]);
-        if !gp.cards.is_empty() {
+    if let Some(gp) = gpages.as_mut() {
+        let home_view = gallery_home.and_then(|h| listed.iter().find(|v| v.item.id == h.id));
+        let (index_url, heading) = match home_view {
+            Some(v) => (v.item.url.clone(), v.item.title.clone()),
+            None => ("/models/".to_string(), gp.title.clone()),
+        };
+        // Which listed posts show each model (by the model's key in the models repository).
+        for c in gp.cards.iter_mut() {
+            c.used_in = listed
+                .iter()
+                .filter(|v| v.item.kind != Kind::Page || v.item.url != "/")
+                .filter(|v| shows_models.get(&v.item.id).is_some_and(|keys| keys.iter().any(|k| media.resolve(k).and_then(|m| m.ids.get("model")) == Some(&c.key))))
+                .map(|v| crate::gallery::NavLink { url: v.item.url.clone(), name: v.item.title.clone() })
+                .collect();
+        }
+        if let Some(v) = home_view {
+            write("models/index.html", redirect_page(&v.item.url, &v.item.title), &mut files)?;
+        } else {
             let mut c = base("/models/", &gp.title, false);
             c.insert("heading", &gp.title);
             c.insert("intro", &gp.intro);
             c.insert("cards", &gp.cards);
             c.insert("projects", &gp.projects);
+            c.insert("show_chips", &true);
+            c.insert("embedded", &false);
             c.insert("og_image", &gp.cards.first().map(|m| m.og_image.clone()).unwrap_or_default());
             write("models/index.html", tera.render("models.html", &c).context("rendering models.html")?, &mut files)?;
             gallery_urls.push("/models/".into());
-            for m in &gp.cards {
-                let mut c = base(&m.url, &m.name, false);
-                c.insert("heading", &gp.title);
-                c.insert("m", m);
-                c.insert("viewer_js", crate::model::VIEWER_JS);
-                write(&page_file(&m.url), tera.render("model.html", &c).with_context(|| format!("rendering model.html for {}", m.key))?, &mut files)?;
-                gallery_urls.push(m.url.clone());
-            }
+        }
+        for m in &gp.cards {
+            let mut c = base(&m.url, &m.name, false);
+            c.insert("heading", &heading);
+            c.insert("index_url", &index_url);
+            c.insert("m", m);
+            c.insert("viewer_js", crate::model::VIEWER_JS);
+            write(&page_file(&m.url), tera.render("model.html", &c).with_context(|| format!("rendering model.html for {}", m.key))?, &mut files)?;
+            gallery_urls.push(m.url.clone());
         }
     }
 
@@ -611,6 +681,17 @@ pub fn build(site: &Site, opts: &BuildOptions) -> Result<BuildReport> {
     write_manifest(&out, &files)?;
     let pages = files.iter().filter(|f| f.ends_with(".html")).count();
     Ok(BuildReport { out_dir: out, pages, items: items.len(), drafts_included: opts.drafts, files, warnings })
+}
+
+/// A page that sends readers on to `url` (keeping the `#project` filter), for an address that
+/// moved: /models/ when the gallery lives in a post.
+fn redirect_page(url: &str, title: &str) -> String {
+    let u = escape_html(url);
+    let js = serde_json::to_string(url).unwrap_or_default().replace('<', "\\u003c");
+    format!(
+        "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><title>{t}</title>\n<link rel=\"canonical\" href=\"{u}\">\n<meta name=\"robots\" content=\"noindex\">\n<meta http-equiv=\"refresh\" content=\"0; url={u}\">\n<script>location.replace({js} + location.hash)</script></head>\n<body><p>This page has moved to <a href=\"{u}\">{t}</a>.</p></body></html>\n",
+        t = escape_html(title)
+    )
 }
 
 fn escape_html(s: &str) -> String {

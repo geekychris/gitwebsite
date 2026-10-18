@@ -127,6 +127,10 @@ async fn items_create(State(st): State<AppState>, Json(a): Json<ops::NewArgs>) -
 }
 
 async fn items_get(State(st): State<AppState>, AxPath(id): AxPath<String>) -> ApiResult {
+    if let Some(id) = id.strip_suffix("/models") {
+        let id = id.to_string();
+        return with_site(&st, move |s| crate::integrations::site_models::post_models(s, &id)).await;
+    }
     with_site(&st, move |s| ops::show(s, &id)).await
 }
 
@@ -153,7 +157,13 @@ async fn items_post(State(st): State<AppState>, AxPath(rest): AxPath<String>, bo
         let id = id.to_string();
         return with_site(&st, move |s| enhance::start(s, &id)).await;
     }
-    let id = rest.strip_suffix("/status").ok_or_else(|| ApiError::bad("use POST /api/items/{id}/status or /enhance"))?.to_string();
+    // POST /api/items/{id}/models {action: add|remove|update, model?, index?, caption?, download?, after_line?}
+    if let Some(id) = rest.strip_suffix("/models") {
+        let id = id.to_string();
+        let ch: crate::integrations::site_models::PostChange = serde_json::from_value(body.map(|b| b.0).unwrap_or(Value::Null)).map_err(ApiError::bad)?;
+        return with_site(&st, move |s| crate::integrations::site_models::post_change(s, &id, &ch)).await;
+    }
+    let id = rest.strip_suffix("/status").ok_or_else(|| ApiError::bad("use POST /api/items/{id}/status, /enhance or /models"))?.to_string();
     let b: StatusBody = serde_json::from_value(body.map(|b| b.0).unwrap_or(Value::Null)).map_err(ApiError::bad)?;
     with_site(&st, move |s| ops::set_status(s, &id, &b.status)).await
 }

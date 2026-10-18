@@ -25,7 +25,7 @@ an image path/URL, :status: draft|published, :visibility: public|unlisted, :repo
 runs), :embed: true (apps: embed in an iframe), :source: <registry id>, :featured: true (home page Featured strip), :pinned: true or :pinned: <n> (pinned to the top of the home page, lowest n first; pinned, featured and latest never repeat each other). Images: \
 image::media:<key>[Alt text] for library media (add_media first), image::photo.jpg[] for files beside a bundle's \
 index.adoc, or image::https://...[] for external URLs; video::media:<key>[]; 3-D models: \
-model::media:<key>[Caption, download=true|false] (add_model first, from the Meshy models repository). Runnable code: a block preceded by \
+model::media:<key>[Caption, download=true|false] (add_model first, from the Meshy models repository; or post_add_model / post_remove_model), and the whole models gallery: models::gallery[] (or models::gallery[project=<id>]). Runnable code: a block preceded by \
 [source.playground,javascript] (or python, html). New content is always created as a draft.";
 
 fn tools() -> Value {
@@ -222,6 +222,14 @@ fn tools() -> Value {
             "polycount": {"type": "integer", "description": "Triangles in the web model (default 150000)"},
             "download_polycount": {"type": "integer", "description": "Decimate the downloadable STL to this many triangles"},
             "force": {"type": "boolean", "description": "Replace an existing key holding something else"}}), &["model"])},
+        {"name": "post_models", "description": "The 3-D models a post (article, project, update, page) shows: each model:: line with its index, line number, media key, caption, download setting, and the repository model behind it. Also how many models::gallery[] blocks it has.",
+         "inputSchema": s(json!({"id": str_("Item id, slug, or URL")}), &["id"])},
+        {"name": "post_add_model", "description": "Show a 3-D model in a post: adds a model::media:<key>[Caption] block (at the end, or after a line). model is a media key, or <project>/<slug> from meshy_models — then its web model is made first with Blender (10-60 s) if the site has none. Saves the post's file.",
+         "inputSchema": s(json!({"id": str_("Item id, slug, or URL"), "model": str_("Media key or <project>/<slug>"), "caption": str_("Caption (default: the media entry's)"),
+            "download": {"type": "boolean", "description": "Offer readers the print file (default: the media entry's setting)"},
+            "after_line": {"type": "integer", "description": "Put it after this 1-based line (default: end of the post)"}}), &["id", "model"])},
+        {"name": "post_remove_model", "description": "Take a 3-D model out of a post (its model:: line). Give the model (media key or <project>/<slug>) or its index from post_models. Saves the post's file.",
+         "inputSchema": s(json!({"id": str_("Item id, slug, or URL"), "model": str_("Media key or <project>/<slug>"), "index": {"type": "integer", "description": "0-based, from post_models"}}), &["id"])},
     ])
 }
 
@@ -286,6 +294,19 @@ fn call(root: &PathBuf, name: &str, a: &Value) -> Result<Value> {
                 ids: Default::default(),
                 ..Default::default()
             })
+        }
+        "post_models" => crate::integrations::site_models::post_models(&site, req(a, "id")?),
+        "post_add_model" | "post_remove_model" => {
+            use crate::integrations::site_models::{post_change, PostChange};
+            let ch = PostChange {
+                action: if name == "post_add_model" { "add" } else { "remove" }.into(),
+                model: sv(a, "model").map(str::to_string),
+                index: a.get("index").and_then(|v| v.as_u64()).map(|n| n as usize),
+                caption: sv(a, "caption").map(str::to_string),
+                download: a.get("download").filter(|v| v.is_boolean()).cloned(),
+                after_line: a.get("after_line").and_then(|v| v.as_u64()).map(|n| n as usize),
+            };
+            post_change(&site, req(a, "id")?, &ch)
         }
         "add_model" => {
             let mut o: crate::integrations::model_assets::AddModel = serde_json::from_value(a.clone()).context("bad arguments")?;

@@ -18,6 +18,7 @@ pub const TEMPLATES: &[(&str, &str)] = &[
     ("list.html", include_str!("../theme/templates/list.html")),
     ("model.html", include_str!("../theme/templates/model.html")),
     ("models.html", include_str!("../theme/templates/models.html")),
+    ("models_grid.html", include_str!("../theme/templates/models_grid.html")),
     ("macros.html", include_str!("../theme/templates/macros.html")),
     ("page.html", include_str!("../theme/templates/page.html")),
     ("playground.html", include_str!("../theme/templates/playground.html")),

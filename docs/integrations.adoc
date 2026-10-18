@@ -192,11 +192,11 @@ them with their sizes. REST: `POST /api/media/model` (`{"model": "<project>/<slu
 [[models-gallery]]
 === The website's models gallery
 
-Besides models in posts, the site can have a gallery of them: `/models/` (a card grid with project
-filters) and a page per model, `/models/<project>/<slug>/` (every angle render, the description,
-printed size, parts, triangle count, and — where switched on — the interactive 3-D viewer). Only
-the models you switch on are shown. The choice lives in the site, in `models.yaml` beside
-`site.yaml`:
+Besides models in posts, the site can have a gallery of them: a card grid with project filters,
+and a page per model, `/models/<project>/<slug>/` (every angle render, the description, printed
+size, parts, triangle count, the posts that show it, and — where switched on — the interactive 3-D
+viewer). Only the models you switch on are shown. The choice lives in the site, in `models.yaml`
+beside `site.yaml`:
 
 [source,yaml]
 ----
@@ -221,6 +221,24 @@ that folder. Commit `models.yaml` and `static/model-gallery/` together; the gall
 from the site repository alone. After editing `models.yaml` by hand, or when the repository's
 renders change, run `gw models sync-site`.
 
+*Where the grid is.* Put `models::gallery[]` in an article (or page) and that post becomes the
+gallery's home — a living article: your own text, then the grid. Then
+
+* `/models/` sends readers to the post (keeping a `#<project>` filter), and is left out of the
+  sitemap; take *Models* out of `nav:` in site.yaml if it was there;
+* the model pages' breadcrumbs lead back to the post;
+* the post's "updated" date follows the newest model put on the website (each model's `added:`
+  date in `models.yaml`, set when it is switched on; for older entries, the date the model was
+  made) — so it rises in feeds and listings as the gallery grows;
+* the post's hero image is used for cards and link previews but not repeated above the grid, and
+  its reading time counts only the text.
+
+Without such a post, the build writes the grid at `/models/` (`models.html`, with `models.yaml`'s
+`title` and `intro`). The app's Models page has *Make gallery article…* for this (a draft with your
+introduction and the block), and links to the gallery article once there is one.
+`models::gallery[project=<id>]` shows one project's models anywhere (no chips; it does not make
+the post the gallery's home). One gallery per page.
+
 The interactive viewer uses the site's web model for that model — a `kind: model` media entry
 whose `ids.model` is the key, made by `gw media add-model <project>/<slug> --download none`. It is
 loaded only when a model is opened. A print-file download appears only if that media entry has
@@ -239,15 +257,17 @@ model.
 In the app, the *Models* page shows "N on the website" and a *Website: All / On / Off* filter;
 every card has a *Show on website* switch, a selected project has *Show all on website* / *Hide
 all*, and a model's panel has *Show on website* and *Interactive 3-D* (which first makes the web
-model with Blender, 10–60 s, when the site has none). *Gallery preview* opens `/preview/models/`
-(rebuild the preview to see changes). REST: `GET /api/site-models`; `PUT /api/site-models`
+model with Blender, 10–60 s, when the site has none), and the posts that show it (*In posts*) with
+*Add to post…*. *Gallery article* / *Preview* open the gallery's home post (or *Gallery preview*,
+`/preview/models/`, when there is none; rebuild the preview to see changes). REST: `GET /api/site-models`; `PUT /api/site-models`
 `{"changes": [{"key": "<project>/<slug>" | "project": "<p>", "on": true, "viewer": true,
 "featured": true}]}` — keys must be models in the repository.
 
-The pages use the templates `models.html` and `model.html` and `static/css/models.css` and
+The pages use the templates `models.html`, `models_grid.html` (the grid, also used by
+`models::gallery[]`) and `model.html`, and `static/css/models.css` and
 `static/js/models.js` (a site's own files of the same name replace them). Without JavaScript the
 grid links to the model pages and the angle thumbnails to the images; with it, project chips
-filter the grid (`/models/#<project>`), a card opens the model in a dialog (the address becomes the
+filter the grid (`#<project>` in the address), a card opens the model in a dialog (the address becomes the
 model's page, so it can be shared), and the thumbnails or ← → switch the views. Each model page
 has its hero render as its Open Graph image; all are in the sitemap.
 
