@@ -11,6 +11,11 @@
 //! [[sites]]
 //! name = "My site"
 //! path = "/Users/me/sites/my-site"
+//!
+//! [meshy]                       # optional: Meshy.ai model sync (`gw meshy`)
+//! repo = "~/code/meshy-models"
+//! interval_hours = 24
+//! enabled = true
 //! ```
 //!
 //! The file lives in `$GW_CONFIG_DIR`, else `$XDG_CONFIG_HOME/gitwebsite`, else
@@ -37,6 +42,50 @@ pub struct UserConfig {
     pub gw_bin: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sites: Vec<SiteEntry>,
+    /// Meshy.ai model sync (`gw meshy`); absent means the defaults ([`MeshyConfig::default`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meshy: Option<MeshyConfig>,
+}
+
+/// Where the Meshy models repository is and how often `gw serve` syncs it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MeshyConfig {
+    /// The models repository (holding `tools/sync`); `~` allowed. Default: the first of
+    /// [`DEFAULT_MESHY_REPOS`] that exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+    /// Hours between scheduled syncs in `gw serve` (free downloads only).
+    #[serde(default = "default_interval")]
+    pub interval_hours: u32,
+    /// Whether `gw serve` runs the scheduled sync at all.
+    #[serde(default = "yes")]
+    pub enabled: bool,
+}
+
+fn default_interval() -> u32 {
+    24
+}
+fn yes() -> bool {
+    true
+}
+
+impl Default for MeshyConfig {
+    fn default() -> Self {
+        MeshyConfig { repo: None, interval_hours: default_interval(), enabled: true }
+    }
+}
+
+/// Places a Meshy models repository is looked for when `meshy.repo` is not set.
+pub const DEFAULT_MESHY_REPOS: &[&str] = &["~/code/claude_world/meshy-models", "~/code/meshy-models"];
+
+impl MeshyConfig {
+    /// The repository to use: `repo` (expanded), else the first default that has `tools/sync`.
+    pub fn repo_path(&self) -> Option<PathBuf> {
+        match &self.repo {
+            Some(r) if !r.trim().is_empty() => Some(expand_home(r.trim())),
+            _ => DEFAULT_MESHY_REPOS.iter().map(|r| expand_home(r)).find(|p| p.join("tools/sync").exists()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -155,6 +204,11 @@ impl UserConfig {
         Ok(e)
     }
 
+    /// The Meshy settings, or the defaults when the file has no `[meshy]` table.
+    pub fn meshy(&self) -> MeshyConfig {
+        self.meshy.clone().unwrap_or_default()
+    }
+
     /// Where to look for checkouts: `GW_REPO_ROOTS` (`:`-separated), else `repo_roots`, else the
     /// defaults that exist.
     pub fn repo_roots(&self) -> Vec<PathBuf> {
@@ -227,5 +281,27 @@ mod tests {
         let round: UserConfig = toml::from_str(&toml::to_string_pretty(&c).unwrap()).unwrap();
         assert_eq!(round, c);
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn meshy_config() {
+        // No [meshy] table: defaults.
+        let c: UserConfig = toml::from_str("current = \"/x\"\n").unwrap();
+        assert_eq!(c.meshy, None);
+        assert_eq!(c.meshy().interval_hours, 24);
+        assert!(c.meshy().enabled);
+        // Partial table: missing keys take their defaults.
+        let c: UserConfig = toml::from_str("[meshy]\nrepo = \"~/m\"\n").unwrap();
+        let m = c.meshy();
+        assert_eq!((m.interval_hours, m.enabled), (24, true));
+        assert_eq!(m.repo_path().unwrap(), expand_home("~/m"));
+        // Round trip.
+        let mut c = UserConfig::default();
+        c.meshy = Some(MeshyConfig { repo: Some("/r".into()), interval_hours: 6, enabled: false });
+        let t = toml::to_string_pretty(&c).unwrap();
+        assert!(t.contains("[meshy]") && t.contains("interval_hours = 6") && t.contains("enabled = false"), "{t}");
+        let back: UserConfig = toml::from_str(&t).unwrap();
+        assert_eq!(back, c);
+        assert_eq!(back.meshy().repo_path().unwrap(), PathBuf::from("/r"));
     }
 }

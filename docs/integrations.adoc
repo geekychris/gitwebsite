@@ -1,8 +1,8 @@
-= Integrations: SmugMug and WordPress
+= Integrations: SmugMug, WordPress and Meshy
 :toc:
 
-Credentials are stored in the macOS Keychain (services `gitwebsite-smugmug` and
-`gitwebsite-wordpress`). The `auth` commands are interactive — run them yourself in a
+Credentials are stored in the macOS Keychain (services `gitwebsite-smugmug`,
+`gitwebsite-wordpress` and `gitwebsite-meshy`). The `auth` commands are interactive — run them yourself in a
 terminal; secrets are never echoed or logged.
 
 == SmugMug: hosting images and video
@@ -67,3 +67,88 @@ gw wordpress crosspost articles/router-sled --status publish
 
 The WordPress copy ends with "Originally published at …" linking back to this site, and the
 remote post is recorded in the registry. Only locally published items can be cross-posted.
+
+== Meshy models
+
+https://www.meshy.ai[Meshy] makes 3D models; it keeps each model's download links for about three
+days, after which getting the files back costs a paid remesh (5 credits). gitwebsite keeps a local
+git repository of your Meshy models in step with your account, so nothing expires unseen.
+
+The work is done by the models repository's own sync tool, `<repo>/tools/sync`: it lists your Meshy
+tasks, downloads new models while the links are live (free), lays out build plates, renders images,
+regenerates the catalogue and commits. gitwebsite runs it, records the result, and shows the models.
+Each model folder holds a print-ready `<slug>-print.stl` (one part) or `<slug>-plate*.stl` (build
+plates) in Git LFS, `images/`, `README.md` and `meshy.json`; the full-resolution `<slug>.stl` and
+Meshy's `.glb`, `.3mf`, `.usdz` and `.blend` files are kept beside them locally and are not in git.
+
+=== Setting up
+
+. Store the API key (from https://www.meshy.ai/settings/api) in the Keychain — `security` prompts
+  for it, so it never appears in your shell history:
++
+[source,sh]
+----
+security add-generic-password -s gitwebsite-meshy -a api-key -w
+----
+. Point gitwebsite at the models repository (by default it uses `~/code/claude_world/meshy-models`
+  or `~/code/meshy-models` if one exists):
++
+[source,sh]
+----
+gw meshy config --repo ~/code/meshy-models     # --interval 24 (hours), --enable / --disable
+----
+
+The settings go in the user config (`~/.config/gitwebsite/config.toml`):
+
+[source,toml]
+----
+[meshy]
+repo = "/Users/me/code/meshy-models"
+interval_hours = 24
+enabled = true
+----
+
+=== Commands
+
+[source,sh]
+----
+gw meshy status                          # last sync, next one, credit balance, models, new, expired
+gw meshy sync                            # now: free downloads only (streams the tool's output)
+gw meshy sync --dry-run                  # look only: what is waiting on Meshy, what recovery would cost
+gw meshy sync --recover --max-credits 25 # ALSO recover expired models: spends up to 25 credits
+gw meshy models [--project amiga]        # the models: folder, triangles, print size, parts, name
+----
+
+`--recover` is never implied: it needs `--max-credits`, and the sync tool also stops before the
+balance would fall below 250 credits. It never pays twice for the same model.
+
+=== The schedule
+
+While `gw serve` or the desktop app runs, it syncs every `interval_hours` (default 24) — *without*
+`--recover`, so a scheduled sync only ever downloads free. The first check is about a minute and a
+half after start: if the last sync is older than the interval (or there has never been one), it runs
+then. A manual sync counts, so syncing by hand pushes the next scheduled one back; a failed sync is
+retried after an hour. Dry runs don't count.
+
+* Runs never overlap, whoever starts them (app, CLI, MCP): a lock file holds the running process.
+* Each run's output is kept in `~/.config/gitwebsite/meshy/logs/`, and the last 20 results in
+  `meshy/history.json`.
+* When new models arrive you get a macOS notification, and the app shows them (a count beside
+  *Models*, and a banner on the page until you dismiss it).
+* Models whose links expired before a sync got them are listed — with what recovering them would
+  cost — but never recovered automatically.
+
+=== In the app
+
+*Models* shows the last and next sync, the credit balance, a *Sync now* button (with the tool's
+output live while it runs), *Check Meshy* (a dry run), filter chips per project, and a card per
+model. A card opens the model: every view, its size, triangles and parts, the print files, *Show in
+Finder*, and its README. If any models have expired, *Recover N models (N×5 credits)* asks you to
+confirm the exact number of credits first.
+
+The REST API: `GET /api/meshy/status`, `POST /api/meshy/sync` (`{"recover": false}` or
+`{"recover": true, "max_credits": N}`, `"dry_run": true`; 409 while one runs), `GET /api/meshy/models`
+(`?project=`), `GET /api/meshy/models/{project}/{slug}` (with the README), `GET /api/meshy/file?path=`
+(images from the models repository only), `GET /api/meshy/log` (`?run=&offset=`), `GET|PUT
+/api/meshy/config`, `POST /api/meshy/reveal`, `POST /api/meshy/seen`. MCP tools: `meshy_status`,
+`meshy_sync` (recover needs an explicit `max_credits`), `meshy_models`.

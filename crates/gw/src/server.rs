@@ -897,6 +897,124 @@ static DICTATE: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>> = std::sync::On
 pub fn set_dictation_hook(f: impl Fn() + Send + Sync + 'static) {
     let _ = DICTATE.set(Box::new(f));
 }
+// ------------------------------------------------------------------ handlers: Meshy models
+
+mod meshy_api {
+    use super::*;
+    use crate::integrations::meshy;
+
+    async fn blocking<F>(f: F) -> ApiResult
+    where
+        F: FnOnce(&meshy::Ctx) -> anyhow::Result<Value> + Send + 'static,
+    {
+        let v = tokio::task::spawn_blocking(move || -> anyhow::Result<Value> { f(&meshy::Ctx::load()?) })
+            .await
+            .map_err(ApiError::server)??;
+        Ok(Json(v))
+    }
+
+    /// GET /api/meshy/status — last sync, next due, balance, counts.
+    pub async fn status() -> ApiResult {
+        blocking(|c| meshy::status(c, true)).await
+    }
+
+    /// POST /api/meshy/sync {recover?, max_credits?, dry_run?} — start a sync in the background
+    /// (409 while one runs). `recover` spends credits and needs an explicit `max_credits`.
+    pub async fn sync(body: Option<Json<meshy::SyncOptions>>) -> ApiResult {
+        let opts = body.map(|b| b.0).unwrap_or_default();
+        blocking(move |c| meshy::spawn_sync(c.clone(), opts, "app")).await
+    }
+
+    #[derive(Deserialize)]
+    pub struct ModelsQuery {
+        project: Option<String>,
+    }
+
+    /// GET /api/meshy/models?project=
+    pub async fn models(Query(q): Query<ModelsQuery>) -> ApiResult {
+        blocking(move |c| meshy::models(c, q.project.as_deref())).await
+    }
+
+    /// GET /api/meshy/models/{project}/{slug} — one model with its README.
+    pub async fn model(AxPath((project, slug)): AxPath<(String, String)>) -> ApiResult {
+        blocking(move |c| meshy::model(c, &project, &slug)).await
+    }
+
+    #[derive(Deserialize)]
+    pub struct ModelBody {
+        project: String,
+        slug: String,
+    }
+
+    /// POST /api/meshy/reveal {project, slug} — show the model's folder in the Finder.
+    pub async fn reveal(Json(b): Json<ModelBody>) -> ApiResult {
+        blocking(move |c| meshy::reveal(c, &b.project, &b.slug)).await
+    }
+
+    /// POST /api/meshy/seen — the app has shown the newly arrived models.
+    pub async fn seen() -> ApiResult {
+        blocking(meshy::mark_seen).await
+    }
+
+    #[derive(Deserialize)]
+    pub struct LogQuery {
+        run: Option<String>,
+        #[serde(default)]
+        offset: u64,
+    }
+
+    /// GET /api/meshy/log?run=&offset= — a run's output from a byte offset (default: the running
+    /// or newest run), for live progress.
+    pub async fn log(Query(q): Query<LogQuery>) -> ApiResult {
+        blocking(move |c| meshy::log_since(c, q.run.as_deref(), q.offset)).await
+    }
+
+    #[derive(Deserialize)]
+    pub struct ConfigBody {
+        repo: Option<String>,
+        interval_hours: Option<u32>,
+        enabled: Option<bool>,
+    }
+
+    /// GET/PUT /api/meshy/config
+    pub async fn config_get() -> ApiResult {
+        blocking(|_| meshy::config_value()).await
+    }
+    pub async fn config_put(Json(b): Json<ConfigBody>) -> ApiResult {
+        blocking(move |_| {
+            let repo = b.repo.as_deref().map(|r| gw_core::config::expand_home(r.trim()));
+            meshy::set_config(repo.as_deref(), b.interval_hours, b.enabled)
+        })
+        .await
+    }
+
+    #[derive(Deserialize)]
+    pub struct FileQuery {
+        path: String,
+    }
+
+    /// GET /api/meshy/file?path=<project>/<slug>/images/hero.webp — images from the models
+    /// repository only ([`meshy::safe_file`]).
+    pub async fn file(Query(q): Query<FileQuery>) -> Response {
+        let r = tokio::task::spawn_blocking(move || {
+            let ctx = meshy::Ctx::load().ok()?;
+            meshy::safe_file(ctx.repo.as_deref()?, &q.path)
+        })
+        .await;
+        match r {
+            Ok(Some(p)) => match std::fs::read(&p) {
+                Ok(bytes) => Response::builder()
+                    .header(header::CONTENT_TYPE, content_type(&p))
+                    .header(header::CACHE_CONTROL, "private, max-age=300")
+                    .body(Body::from(bytes))
+                    .unwrap(),
+                Err(_) => StatusCode::NOT_FOUND.into_response(),
+            },
+            _ => (StatusCode::NOT_FOUND, Json(json!({ "error": "no such image in the models repository" }))).into_response(),
+        }
+    }
+}
+
 
 async fn dictate_info() -> Json<Value> {
     Json(json!({ "available": DICTATE.get().is_some() }))
@@ -983,6 +1101,15 @@ fn router_for(st: AppState) -> Router {
         .route("/api/stories/{slug}/discard", post(story_discard))
         .route("/api/stories/{slug}/request-changes", post(story_request_changes))
         .route("/api/stories/{slug}/claude", get(story_claude_status).post(story_claude_start).delete(story_claude_stop))
+        .route("/api/meshy/status", get(meshy_api::status))
+        .route("/api/meshy/sync", post(meshy_api::sync))
+        .route("/api/meshy/models", get(meshy_api::models))
+        .route("/api/meshy/models/{project}/{slug}", get(meshy_api::model))
+        .route("/api/meshy/reveal", post(meshy_api::reveal))
+        .route("/api/meshy/seen", post(meshy_api::seen))
+        .route("/api/meshy/log", get(meshy_api::log))
+        .route("/api/meshy/config", get(meshy_api::config_get).put(meshy_api::config_put))
+        .route("/api/meshy/file", get(meshy_api::file))
         .route("/api/smugmug/albums", get(smugmug_albums))
         .route("/api/photos/albums", get(photos_albums))
         .route("/api/smugmug/browse", get(smugmug_browse))
@@ -1131,6 +1258,8 @@ pub async fn serve_with(
     }
     let st = AppState { root: Arc::new(RwLock::new(site_root)) };
     watch_preview(st.clone());
+    // Meshy models: the scheduled free sync (does nothing until a models repository is set up).
+    crate::integrations::meshy::start_scheduler();
     axum::serve(listener, router_for(st)).await?;
     Ok(())
 }

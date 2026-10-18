@@ -1,9 +1,11 @@
-//! External services: SmugMug (media hosting) and WordPress (import and cross-posting).
+//! External services: SmugMug (media hosting), WordPress (import and cross-posting), and
+//! Meshy.ai (3D models, synced into a git repository by that repository's own tool).
 //! Credentials live in the macOS Keychain, entered by the user in a terminal — never in
 //! arguments, files, or chat.
 
 pub mod html2adoc;
 pub mod keychain;
+pub mod meshy;
 pub mod oauth1;
 pub mod photos;
 pub mod smugmug;
@@ -135,4 +137,45 @@ pub enum WordpressCmd {
     },
     /// Remove stored WordPress credentials from the Keychain.
     Logout,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum MeshyCmd {
+    /// Last sync, next scheduled one, credit balance, and counts: models, new ones available
+    /// free, expired ones not recovered (and what recovering them would cost).
+    Status,
+    /// Run the models repository's sync tool now and record the result. Without --recover it
+    /// only downloads new models still inside Meshy's free 3-day window.
+    Sync {
+        /// Also recover expired models — a paid remesh, 5 credits each. Needs --max-credits.
+        #[arg(long, requires = "max_credits")]
+        recover: bool,
+        /// The most this run may spend (with --recover). The sync tool also never lets the
+        /// balance fall below its --min-balance (250).
+        #[arg(long)]
+        max_credits: Option<u64>,
+        /// List and plan only; change nothing.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// The models in the repository (project/slug, triangles, print size, parts, name).
+    Models {
+        #[arg(long)]
+        project: Option<String>,
+    },
+    /// Show or change the settings: the repository, the schedule (hours), on or off.
+    Config {
+        /// The Meshy models repository (holding tools/sync).
+        #[arg(long)]
+        repo: Option<PathBuf>,
+        /// Hours between scheduled syncs in `gw serve` / the app (default 24).
+        #[arg(long)]
+        interval: Option<u32>,
+        /// Turn the scheduled sync on.
+        #[arg(long, conflicts_with = "disable")]
+        enable: bool,
+        /// Turn the scheduled sync off (on-demand syncs still work).
+        #[arg(long)]
+        disable: bool,
+    },
 }
