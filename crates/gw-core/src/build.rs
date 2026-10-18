@@ -345,6 +345,7 @@ pub fn build(site: &Site, opts: &BuildOptions) -> Result<BuildReport> {
     let base = |path: &str, title: &str, noindex: bool| -> Ctx {
         let mut c = Ctx::new();
         c.insert("site", &cfg.site);
+        c.insert("analytics_id", &cfg.site.analytics_id());
         c.insert("nav", &cfg.nav);
         c.insert("page_path", path);
         c.insert("page_title", title);

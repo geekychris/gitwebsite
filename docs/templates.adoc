@@ -30,7 +30,13 @@ to find and edit; delete a copied file to go back to the built-in one.
 == What templates can use
 
 Every page: `site` (title, tagline, base_url, author, description, links), `nav`, `page_path`,
-`page_title`, `noindex`, `areas_tree`, `build_year`.
+`page_title`, `noindex`, `areas_tree`, `build_year`, and `analytics_id`.
+
+`analytics_id` is the Google Analytics 4 measurement id from `site.google_analytics` in
+site.yaml (e.g. `google_analytics: G-XXXXXXXXXX` under `site:`), present only when it is a
+well-formed `G-` id. The default `base.html` adds the gtag.js snippet when it is set; the snippet
+does nothing on `localhost`/`127.0.0.1`, so previews aren't counted. A site with its own
+`templates/base.html` needs the same `{% if analytics_id %}…{% endif %}` block before `</head>`.
 
 Item pages add `item`, and listings add `entries`, each an item view with: `id`, `kind`,
 `kind_label`, `title`, `url`, `slug`, `date_human`, `date_iso`, `updated_human`, `summary`,
