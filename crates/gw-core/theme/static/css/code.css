@@ -1,0 +1,45 @@
+/* The code catalog: /code/ and /code/<slug>/ (code.html, code_project.html). */
+.code-filterbar { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem 1rem; margin: .2rem 0 .8rem; }
+.code-filter { font: inherit; width: min(420px, 100%); padding: .55rem .8rem; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--ink); }
+.code-count { margin: 0; color: var(--faint); font-size: .85rem; font-variant-numeric: tabular-nums; }
+.code-chips { display: flex; flex-wrap: wrap; gap: .4rem; margin: 0 0 .4rem; }
+.code-chip { font: inherit; font-size: .85rem; color: var(--muted); background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: .25rem .75rem; cursor: pointer; }
+.code-chip span { color: var(--faint); font-size: .78rem; margin-left: .15rem; }
+.code-chip:hover { color: var(--ink); }
+.code-chip[aria-pressed="true"] { color: #fff; background: var(--accent); border-color: var(--accent); }
+.code-chip[aria-pressed="true"] span { color: inherit; opacity: .8; }
+.code-tagline { margin: .6rem 0 0; color: var(--muted); }
+.code-group-desc { margin: -.6rem 0 1rem; color: var(--muted); font-size: .92rem; max-width: 44rem; }
+.code-grid { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: .8rem; }
+.code-card a { display: flex; gap: .85rem; align-items: flex-start; height: 100%; padding: .9rem 1rem; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: var(--ink); text-decoration: none; box-shadow: var(--shadow); transition: border-color .15s, transform .15s; }
+.code-card a:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); transform: translateY(-1px); }
+.code-logo { flex: none; width: 56px; height: 56px; border-radius: 12px; object-fit: contain; background: var(--wash); }
+.code-logo.big { width: 112px; height: 112px; border-radius: 22px; }
+.code-mono { display: grid; place-items: center; font: 750 1.25rem/1 var(--sans); letter-spacing: -.02em; color: hsl(var(--h) 45% 32%); background: hsl(var(--h) 60% 92%); }
+.code-logo.big.code-mono { font-size: 2.4rem; }
+@media (prefers-color-scheme: dark) { .code-mono { color: hsl(var(--h) 60% 80%); background: hsl(var(--h) 25% 22%); } }
+.code-body { display: flex; flex-direction: column; gap: .2rem; min-width: 0; }
+.code-body strong { line-height: 1.3; }
+.code-star { color: var(--accent); font-size: .85em; }
+.code-sum { color: var(--muted); font-size: .9rem; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.code-facts { display: flex; flex-wrap: wrap; gap: .2rem .7rem; color: var(--faint); font-size: .78rem; margin-top: .1rem; }
+.code-card[hidden], .code-group[hidden] { display: none; }
+.code-group { scroll-margin-top: 80px; }
+.code-more-tags { margin: .8rem 0 0; color: var(--muted); font-size: .9rem; }
+.code-more-tags summary { cursor: pointer; }
+.code-tags { display: flex; flex-wrap: wrap; gap: .35rem; }
+.code-tags .chip[aria-current] { color: #fff; background: var(--accent); }
+.code-tags .chip[aria-current] .count { color: inherit; }
+
+.code-crumbs { margin: 0 0 1rem; font-size: .9rem; color: var(--muted); }
+.code-crumbs a { color: var(--muted); }
+.code-head { display: flex; gap: 1.4rem; align-items: center; }
+.code-head h1 { margin: 0 0 .3rem; }
+.code-head .lede { margin: 0; }
+@media (max-width: 560px) { .code-head { flex-direction: column; align-items: flex-start; } }
+.code-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin: 1.4rem 0; }
+.code-facts-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: .6rem 1.2rem; margin: 0 0 1.6rem; padding: 1rem 1.1rem; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.code-facts-list dt { font-size: .75rem; text-transform: uppercase; letter-spacing: .06em; color: var(--faint); }
+.code-facts-list dd { margin: 0; overflow-wrap: break-word; }
+.code-page-tags { margin: 1.4rem 0 0; }
+.code-related { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }

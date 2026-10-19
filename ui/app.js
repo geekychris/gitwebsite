@@ -2503,7 +2503,411 @@ function auditEvent(e) {
   return esc(e.event);
 }
 
-const routes = { companion: viewCompanion, content: viewContent, stories: viewStories, ideas: viewIdeas, registry: viewRegistry, media: viewMedia, models: viewModels, publish: viewPublish, preview: viewPreview, sites: viewSites };
+// ---------------------------------------------------------------- Code (the code catalog)
+// The site's git projects (code.yaml → /code/ on the website): #code (the list), #code/<slug>
+// (edit one, improve it with Claude), #code/logos (ChatGPT prompts, import, pull requests),
+// #code/categories (the category list; a scheme from Claude). Sync, Claude and pull requests run
+// as one background job on the server, followed here.
+
+let codeJobTimer = null;
+function stopCodePoll() { if (codeJobTimer) { clearTimeout(codeJobTimer); codeJobTimer = null; } }
+
+/** Copy without echoing the text (prompts are long). */
+function copyQuiet(text, label = 'Copied') {
+  const ok = () => toast(label);
+  if (navigator.clipboard && window.ClipboardItem) {
+    navigator.clipboard.write([new ClipboardItem({ 'text/plain': new Blob([text], { type: 'text/plain' }) })]).then(ok, fallback);
+  } else fallback();
+  function fallback() {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.append(ta); ta.select();
+    try { document.execCommand('copy'); ok(); } catch { toast('Could not copy', true); }
+    ta.remove();
+  }
+}
+
+/** Follow the server's job into `box` (a <pre>) until it ends; then onDone(job). */
+function followCodeJob(box, onDone, id = null) {
+  stopCodePoll();
+  const tick = async () => {
+    if (!location.hash.startsWith('#code')) return stopCodePoll();
+    let j;
+    try { j = await get('/code/job'); } catch (e) { return toast(e.message, true); }
+    if (id != null && j.id !== id) return;
+    if (box) { box.hidden = false; box.textContent = (j.log || []).join('\n') || '…'; box.scrollTop = box.scrollHeight; }
+    if (j.running) { codeJobTimer = setTimeout(tick, 1500); return; }
+    codeJobTimer = null;
+    if (j.error) toast(j.error, true);
+    onDone && onDone(j);
+  };
+  tick();
+}
+
+async function startCodeJob(path, body, box, onDone) {
+  return guard(async () => {
+    const j = await api('POST', path, body || {});
+    followCodeJob(box, onDone, j.id);
+  });
+}
+
+const codeLogo = (p, size = 44) => p.logo_url
+  ? `<img class="code-logo" src="${esc(p.logo_url)}" alt="" width="${size}" height="${size}" loading="lazy">`
+  : `<span class="code-logo code-mono" style="--h:${hueOf(p.slug)};width:${size}px;height:${size}px">${esc(monoOf(p.display_title || p.slug))}</span>`;
+function hueOf(s) { let h = 2166136261; for (const c of new TextEncoder().encode(s)) { h ^= c; h = Math.imul(h, 16777619) >>> 0; } return h % 360; }
+function monoOf(t) {
+  const w = t.split(/\s+/).filter(x => /^[\p{L}\p{N}]/u.test(x));
+  if (!w.length) return '?';
+  return w.length === 1 ? w[0][0].toUpperCase() + (w[0][1] || '').toLowerCase() : (w[0][0] + w[1][0]).toUpperCase();
+}
+
+async function viewCode(rest = []) {
+  stopCodePoll();
+  if (rest[0] === 'logos') return viewCodeLogos();
+  if (rest[0] === 'categories') return viewCodeCategories();
+  if (rest[0]) return viewCodeProject(decodeURIComponent(rest[0]));
+  const c = await get('/code');
+  const q = sessionStorage.getItem('gw-code-q') || '';
+  const cat = sessionStorage.getItem('gw-code-cat') || 'all';
+  const show = sessionStorage.getItem('gw-code-show') || 'listed';   // listed | hidden | all | nologo
+  const catTitle = id => (c.categories.find(x => x.id === id) || {}).title || (id ? id : 'No category');
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+  const hay = p => `${p.slug} ${p.repo} ${p.display_title} ${p.display_summary} ${(p.tags || []).join(' ')} ${(p.github || {}).language || ''}`.toLowerCase();
+  const shown = c.projects.filter(p =>
+    (cat === 'all' || (p.category || '') === (cat === 'none' ? '' : cat)) &&
+    (show === 'all' || (show === 'listed' && p.listed) || (show === 'hidden' && !p.listed) || (show === 'nologo' && p.listed && !p.logo)) &&
+    words.every(w => hay(p).includes(w)))
+    .sort((a, b) => a.display_title.localeCompare(b.display_title));
+  const counts = {};
+  c.projects.filter(p => p.listed).forEach(p => { counts[p.category || ''] = (counts[p.category || ''] || 0) + 1; });
+  const chip = (id, label, n) => `<button class="chip${id === cat ? ' on' : ''}" data-cat="${esc(id)}">${esc(label)} <span class="muted">${n}</span></button>`;
+  const job = c.job || {};
+  main.innerHTML = `
+    <h1>Code</h1>
+    <p class="sub">Your git projects, shown on the website at <a href="/preview/code/" target="_blank">/code/</a> — ${c.counts.listed} of ${c.counts.all} on it.
+      Kept in <span class="mono">${esc(c.file)}</span>; <em>Sync</em> brings in new repositories from GitHub${c.owner ? ` (${esc(c.owner)})` : ''} and their logos.</p>
+    <div class="cards meshy-stats">
+      <div class="stat"><b>${c.counts.listed}</b>on the website</div>
+      <div class="stat"><b>${c.counts.need_logo}</b>without a logo · <a href="#code/logos">logo prompts</a></div>
+      <div class="stat"><b>${c.counts.awaiting_pr}</b>new logos not yet in their repository</div>
+      <div class="stat"><b>${c.categories.length}</b>categories · <a href="#code/categories">organise</a></div>
+    </div>
+    <div class="bar">
+      <button class="primary" data-sync ${job.running ? 'disabled' : ''}>${job.running && job.kind === 'sync' ? 'Syncing…' : 'Sync from GitHub'}</button>
+      <a class="btn" href="#code/categories">Categories &amp; tags…</a>
+      <a class="btn" href="#code/logos">Logos…</a>
+      <span class="grow"></span>
+      <a class="btn" href="/preview/code/" target="_blank" title="The catalog in the preview build (Build &amp; Publish → Build preview to refresh)">Preview ↗</a>
+    </div>
+    <pre class="list claude-log" data-joblog ${job.running ? '' : 'hidden'}></pre>
+    ${c.exists ? '' : '<p class="muted">No catalog yet — <strong>Sync from GitHub</strong> creates code.yaml with your public repositories (forks and archived ones hidden).</p>'}
+    <div class="bar">
+      <input type="search" data-q placeholder="Search projects" value="${esc(q)}" style="flex:1;min-width:14rem">
+      ${[['listed', 'On website'], ['hidden', 'Hidden'], ['nologo', 'No logo'], ['all', 'All']].map(([id, l]) => `<button class="chip${id === show ? ' on' : ''}" data-show="${id}">${l}</button>`).join('')}
+    </div>
+    <div class="bar">${chip('all', 'All categories', c.counts.listed)}${c.categories.map(x => chip(x.id, x.title, counts[x.id] || 0)).join('')}${counts[''] ? chip('none', 'No category', counts['']) : ''}</div>
+    <table class="code-table"><thead><tr><th></th><th>Project</th><th>Category</th><th>Tags</th><th title="Shown on the website">On site</th></tr></thead>
+    <tbody>${shown.map(p => `<tr class="clickable" data-slug="${esc(p.slug)}">
+      <td style="width:52px">${codeLogo(p)}</td>
+      <td><strong>${esc(p.display_title)}</strong>${p.featured ? ' <span class="pill published">featured</span>' : ''}${p.enhanced ? ' <span class="pill enh" title="Text improved with Claude on ' + esc(p.enhanced) + '">✦</span>' : ''}${p.github.archived ? ' <span class="pill">archived</span>' : ''}${p.github.fork ? ' <span class="pill">fork</span>' : ''}${p.github.gone ? ' <span class="pill need">gone from GitHub</span>' : ''}
+        <div class="muted small">${esc(p.display_summary || '—')}</div><div class="muted small mono">${esc(p.repo)}${p.github.language ? ' · ' + esc(p.github.language) : ''}</div></td>
+      <td>${p.category ? `<span class="pill">${esc(catTitle(p.category))}</span>` : '<span class="muted small">—</span>'}</td>
+      <td class="small">${(p.tags || []).map(t => `<span class="pill">${esc(t)}</span>`).join(' ')}</td>
+      <td><input type="checkbox" data-onsite="${esc(p.slug)}" ${p.listed ? 'checked' : ''} ${p.github.private || p.github.gone ? 'disabled' : ''} title="Show on the website"></td></tr>`).join('')
+      || '<tr><td colspan="5" class="empty">No projects here.</td></tr>'}</tbody></table>`;
+  const qBox = $('[data-q]');
+  let t;
+  qBox.oninput = () => { clearTimeout(t); t = setTimeout(() => { sessionStorage.setItem('gw-code-q', qBox.value); viewCode().then(() => { const b = $('[data-q]'); b.focus(); b.setSelectionRange(b.value.length, b.value.length); }); }, 250); };
+  $$('[data-cat]').forEach(b => b.onclick = () => { sessionStorage.setItem('gw-code-cat', b.dataset.cat); viewCode(); });
+  $$('[data-show]').forEach(b => b.onclick = () => { sessionStorage.setItem('gw-code-show', b.dataset.show); viewCode(); });
+  $$('[data-onsite]').forEach(cb => {
+    cb.onclick = e => e.stopPropagation();
+    cb.onchange = () => guard(async () => { await api('PUT', '/code/projects/' + encodeURIComponent(cb.dataset.onsite), { hidden: !cb.checked }); toast(cb.checked ? 'On the website' : 'Hidden from the website'); });
+  });
+  $$('tr[data-slug]').forEach(tr => tr.onclick = e => { if (e.target.tagName !== 'A' && e.target.tagName !== 'INPUT') location.hash = '#code/' + encodeURIComponent(tr.dataset.slug); });
+  const box = $('[data-joblog]');
+  $('[data-sync]').onclick = () => startCodeJob('/code/sync', {}, box, j => {
+    if (j.result) toast(`Sync: ${j.result.added.length} new, ${j.result.added_hidden.length} hidden, ${j.result.logos_found.length} logos found`);
+    viewCode();
+  });
+  if (job.running) followCodeJob(box, () => viewCode());
+}
+
+async function viewCodeProject(slug) {
+  const [p, c] = await Promise.all([get('/code/projects/' + encodeURIComponent(slug)), get('/code')]);
+  const others = c.projects.filter(x => x.slug !== slug).sort((a, b) => a.display_title.localeCompare(b.display_title));
+  const titleOf = s => (c.projects.find(x => x.slug === s) || {}).display_title || s;
+  let related = [...(p.related || [])];
+  const gh = p.github || {};
+  main.innerHTML = `
+    <p class="muted small"><a href="#code">Code</a> › ${esc(p.display_title)}</p>
+    <div class="code-head-app">${codeLogo(p, 72)}<div><h1 style="margin:0">${esc(p.display_title)}</h1>
+      <p class="sub" style="margin:.2rem 0 0"><a href="${esc(p.repo_url)}" target="_blank">${esc(p.repo)}</a>${gh.language ? ' · ' + esc(gh.language) : ''}${gh.stars ? ' · ★ ' + gh.stars : ''}${gh.pushed ? ' · pushed ' + esc(gh.pushed) : ''}${p.enhanced ? ' · improved with Claude ' + esc(p.enhanced) : ''}</p></div></div>
+    <div class="bar">
+      <button class="primary" data-save>Save</button>
+      <button data-enhance title="Claude reads the README and proposes a better title, summary, description, tags, category, related projects and logo idea. You choose what to keep.">✦ Improve with Claude</button>
+      <span class="grow"></span>
+      <a class="btn" href="/preview${esc(p.url)}" target="_blank" title="This project's page in the preview build">Preview ↗</a>
+      ${p.post_item ? `<a class="btn" href="#edit/${esc(p.post_item.id)}" title="${esc(p.post_item.title)}">Write-up${p.post_item.draft ? ' (draft)' : ''}</a>` : ''}
+    </div>
+    <pre class="list claude-log" data-joblog hidden></pre>
+    <div data-proposal></div>
+    <div class="code-edit">
+      <div class="code-fields">
+        <label>Title <input name="title" value="${esc(p.title)}" placeholder="${esc(p.display_title)}"></label>
+        <label>Summary — one sentence for the tile <span class="muted small" data-sumcount></span><textarea name="summary" rows="2" placeholder="${esc(gh.description || '')}">${esc(p.summary)}</textarea></label>
+        <label>Description — the project's page: paragraphs, \`code\`, **bold**, [text](https://…), “- ” bullets<textarea name="description" rows="10">${esc(p.description)}</textarea></label>
+        <div class="two">
+          <label>Category <select name="category"><option value="">— none —</option>${c.categories.map(x => `<option value="${esc(x.id)}" ${x.id === p.category ? 'selected' : ''}>${esc(x.title)}</option>`).join('')}</select></label>
+          <label>Tags (comma separated) <input name="tags" value="${esc((p.tags || []).join(', '))}" list="code-tags"></label>
+        </div>
+        <datalist id="code-tags">${[...new Set(c.projects.flatMap(x => x.tags || []))].sort().map(t => `<option value="${esc(t)}">`).join('')}</datalist>
+        <label>Related projects (shown on both pages)
+          <div class="code-related-edit" data-related></div>
+          <input data-related-add list="code-projects" placeholder="Add a related project…">
+        </label>
+        <datalist id="code-projects">${others.map(x => `<option value="${esc(x.slug)}">${esc(x.display_title)}</option>`).join('')}</datalist>
+        ${p.related_back.length ? `<p class="muted small">Also listed as related by: ${p.related_back.map(s => `<a href="#code/${encodeURIComponent(s)}">${esc(titleOf(s))}</a>`).join(', ')}</p>` : ''}
+        <div class="bar">
+          <label class="inline"><input type="checkbox" name="shown" ${p.hidden ? '' : 'checked'} ${gh.private || gh.gone ? 'disabled' : ''}> On the website</label>
+          <label class="inline"><input type="checkbox" name="featured" ${p.featured ? 'checked' : ''}> Featured (first in its category)</label>
+        </div>
+        <label>Write-up post (content id; found by its :repo: when empty) <input name="post" value="${esc(p.post)}" placeholder="${esc(p.post_item ? p.post_item.id : 'projects/…')}"></label>
+      </div>
+      <div class="code-side">
+        <div class="code-logo-box" data-drop tabindex="0">${codeLogo(p, 160)}
+          <p class="muted small">${p.logo ? `Logo from ${esc({ readme: 'the README', repo: 'the repository', imported: 'an imported image' }[p.logo_source] || 'the site')}${gh.logo_path ? ` <span class="mono">${esc(gh.logo_path)}</span>` : ''}` : 'No logo yet.'}</p>
+          <p class="small">Drop an image here, or <button data-upload>Choose…</button><input type="file" accept="image/*" data-file hidden></p>
+          ${p.logo_source === 'imported' ? (p.logo_pr ? `<p class="small">In the repository: <a href="${esc(p.logo_pr)}" target="_blank">pull request ↗</a></p>` : '<p class="small"><button data-pr>Add to the repository (PR)…</button></p>') : ''}
+        </div>
+        <label>Logo prompt for ChatGPT <span class="muted small">(edit to write your own; empty = composed from the summary)</span>
+          <textarea name="logo_prompt" rows="9" placeholder="${esc(p.logo_prompt_effective)}">${esc(p.logo_prompt)}</textarea></label>
+        <div class="bar"><button data-copy-prompt>Copy prompt</button><span class="muted small">Save the image as <span class="mono">${esc(p.slug)}.png</span></span></div>
+      </div>
+    </div>`;
+  const f = name => $(`[name="${name}"]`);
+  const sum = f('summary'), sc = $('[data-sumcount]');
+  const count = () => { const n = sum.value.trim().length; sc.textContent = n ? `${n}/140` : ''; sc.style.color = n > 140 ? 'var(--bad)' : ''; };
+  sum.oninput = count; count();
+  const drawRelated = () => {
+    $('[data-related]').innerHTML = related.map(s => `<span class="pill">${esc(titleOf(s))} <button class="x" data-unrel="${esc(s)}" title="Remove">×</button></span>`).join(' ') || '<span class="muted small">None.</span>';
+    $$('[data-unrel]').forEach(b => b.onclick = e => { e.preventDefault(); related = related.filter(x => x !== b.dataset.unrel); drawRelated(); });
+  };
+  drawRelated();
+  const add = $('[data-related-add]');
+  add.onchange = () => {
+    const v = add.value.trim();
+    const hit = c.projects.find(x => x.slug === v) || c.projects.find(x => x.display_title.toLowerCase() === v.toLowerCase());
+    if (hit && hit.slug !== slug && !related.includes(hit.slug)) { related.push(hit.slug); drawRelated(); }
+    else if (!hit) toast('No project ' + v, true);
+    add.value = '';
+  };
+  const values = () => ({
+    title: f('title').value, summary: sum.value, description: f('description').value, category: f('category').value,
+    tags: csv(f('tags').value), related, hidden: !f('shown').checked, featured: f('featured').checked,
+    post: f('post').value, logo_prompt: f('logo_prompt').value,
+  });
+  const save = async (extra = {}) => guard(async () => {
+    await api('PUT', '/code/projects/' + encodeURIComponent(slug), { ...values(), ...extra });
+    toast('Saved');
+    viewCodeProject(slug);
+  });
+  $('[data-save]').onclick = () => save();
+  $('[data-copy-prompt]').onclick = () => copyQuiet(f('logo_prompt').value.trim() || p.logo_prompt_effective, 'Logo prompt copied');
+  const upload = async file => guard(async () => {
+    toast('Importing the logo…');
+    const r = await fetch(`/api/code/logos/upload?slug=${encodeURIComponent(slug)}&name=${encodeURIComponent(file.name)}`, { method: 'POST', body: file });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || r.statusText);
+    toast('Logo imported');
+    viewCodeProject(slug);
+  });
+  const box = $('[data-drop]'), fileIn = $('[data-file]');
+  $('[data-upload]').onclick = e => { e.preventDefault(); fileIn.click(); };
+  fileIn.onchange = () => fileIn.files[0] && upload(fileIn.files[0]);
+  box.ondragover = e => { e.preventDefault(); box.classList.add('over'); };
+  box.ondragleave = () => box.classList.remove('over');
+  box.ondrop = e => { e.preventDefault(); box.classList.remove('over'); const file = e.dataTransfer.files[0]; if (file) upload(file); };
+  const pr = $('[data-pr]');
+  if (pr) pr.onclick = () => confirmLogoPrs([slug], c, () => viewCodeProject(slug));
+  const log = $('[data-joblog]');
+  $('[data-enhance]').onclick = () => startCodeJob(`/code/projects/${encodeURIComponent(slug)}/enhance`, {}, log, j => {
+    log.hidden = true;
+    if (j.result) showProposal(j.result.proposal);
+  });
+  const showProposal = prop => {
+    const cur = values();
+    const fields = [
+      ['title', 'Title', cur.title || p.display_title, prop.title],
+      ['summary', 'Summary', cur.summary || p.display_summary, prop.summary],
+      ['description', 'Description', cur.description, prop.description],
+      ['category', 'Category', (c.categories.find(x => x.id === cur.category) || {}).title || cur.category, (c.categories.find(x => x.id === prop.category) || {}).title || prop.category],
+      ['tags', 'Tags', cur.tags.join(', '), (prop.tags || []).join(', ')],
+      ['related', 'Related', cur.related.map(titleOf).join(', '), (prop.related || []).map(titleOf).join(', ')],
+      ['logo_prompt', 'Logo prompt', cur.logo_prompt || '(composed)', prop.logo_prompt],
+    ].filter(([, , , b]) => b && String(b).trim());
+    const pane = $('[data-proposal]');
+    pane.innerHTML = `<div class="proposal code-proposal"><h2>Claude's proposal</h2><p class="muted small">Tick what to keep, then apply. Nothing is saved until you do.</p>
+      ${fields.map(([k, label, a, b]) => `<div class="code-prop-row"><label class="inline"><input type="checkbox" data-take="${k}" ${String(a) !== String(b) ? 'checked' : ''}> <strong>${label}</strong></label>
+        <div class="two"><div><div class="muted small">Now</div><div class="code-prop-text">${esc(a || '—')}</div></div><div><div class="muted small">Proposed</div><div class="code-prop-text">${esc(b)}</div></div></div></div>`).join('')}
+      <div class="bar"><button class="primary" data-apply>Apply selected and save</button><button data-discard>Discard</button></div></div>`;
+    $('[data-discard]').onclick = () => (pane.innerHTML = '');
+    $('[data-apply]').onclick = () => {
+      const out = {};
+      $$('[data-take]').filter(x => x.checked).forEach(x => { out[x.dataset.take] = prop[x.dataset.take]; });
+      if (!Object.keys(out).length) return toast('Nothing ticked', true);
+      if (out.related) related = out.related;
+      save({ ...out, enhanced: true });
+    };
+    pane.scrollIntoView({ behavior: 'smooth' });
+  };
+}
+
+async function confirmLogoPrs(slugs, c, after) {
+  const rows = slugs.map(s => c.projects.find(x => x.slug === s)).filter(Boolean);
+  const ok = await form(`Open ${rows.length} pull request${rows.length === 1 ? '' : 's'}?`, [
+    { type: 'note', text: `For each repository: a branch gitwebsite/add-logo with the logo as assets/logo.png (512 px) and the logo at the top of the README, and a pull request for you to merge. Repositories: ${rows.map(r => r.repo).join(', ')}.` },
+  ], 'Open pull requests');
+  if (!ok) return;
+  const log = $('[data-joblog]');
+  startCodeJob('/code/logo-prs', { slugs, confirm: true }, log, j => {
+    if (j.result) toast(`${j.result.opened.length} pull request${j.result.opened.length === 1 ? '' : 's'} opened${j.result.failed.length ? `, ${j.result.failed.length} failed` : ''}`, !!j.result.failed.length);
+    after && after();
+  });
+}
+
+async function viewCodeLogos() {
+  const size = parseInt(sessionStorage.getItem('gw-code-batch') || '10', 10);
+  const [pr, c] = await Promise.all([get('/code/logo-prompts?size=' + size), get('/code')]);
+  const waiting = c.projects.filter(p => p.logo_source === 'imported' && !p.logo_pr && p.logo);
+  main.innerHTML = `
+    <p class="muted small"><a href="#code">Code</a> › Logos</p>
+    <h1>Logos</h1>
+    <p class="sub">${pr.count} project${pr.count === 1 ? '' : 's'} on the website without a logo. Paste a batch into ChatGPT, save each image under the file name it is given
+      (<span class="mono">&lt;slug&gt;.png</span>), then drop the images below. Improve a project's text first (✦ Improve with Claude) and its prompt gets better too.</p>
+    <div class="drop" data-drop tabindex="0"><strong>Drop rendered logos here</strong> — matched to projects by file name<br>
+      <span class="small">or import a folder: <input data-dir placeholder="~/Downloads" style="width:18rem"> <button data-import>Import folder</button></span></div>
+    <pre class="list claude-log" data-joblog hidden></pre>
+    <div data-results></div>
+    ${waiting.length ? `<h2>New logos not yet in their repositories (${waiting.length})</h2>
+      <div class="code-logo-strip">${waiting.map(p => `<a href="#code/${encodeURIComponent(p.slug)}" title="${esc(p.repo)}">${codeLogo(p, 64)}<span class="small">${esc(p.display_title)}</span></a>`).join('')}</div>
+      <div class="bar"><button class="primary" data-prs>Open ${waiting.length} pull request${waiting.length === 1 ? '' : 's'}…</button><span class="muted small">Adds assets/logo.png and puts the logo at the top of each README.</span></div>` : ''}
+    <h2>Prompts</h2>
+    <div class="bar"><label class="inline">Logos per batch <select data-size>${[5, 10, 15, 20].map(n => `<option ${n === size ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+      <span class="grow"></span><span class="muted small">House style (end of every prompt): <a href="#code/categories">change</a></span></div>
+    ${pr.batches.map(b => `<div class="panel code-batch"><div class="bar" style="margin:0 0 .5rem"><strong>Batch ${b.number} of ${pr.batches.length}</strong> <span class="muted small">${b.items.length} logos</span><span class="grow"></span>
+        <button class="primary" data-copy-batch="${b.number - 1}">Copy batch ${b.number}</button></div>
+      <ol class="code-prompts">${b.items.map(i => `<li><a href="#code/${encodeURIComponent(i.slug)}"><strong>${esc(i.title)}</strong></a> <span class="mono small">${esc(i.file)}</span>
+        <button class="small" data-copy-one="${esc(i.slug)}">Copy</button><div class="muted small">${esc(i.prompt)}</div></li>`).join('')}</ol></div>`).join('')
+      || '<p class="empty">Every project on the website has a logo.</p>'}`;
+  $('[data-size]').onchange = e => { sessionStorage.setItem('gw-code-batch', e.target.value); viewCodeLogos(); };
+  $$('[data-copy-batch]').forEach(b => b.onclick = () => copyQuiet(pr.batches[+b.dataset.copyBatch].text, `Batch ${+b.dataset.copyBatch + 1} copied — paste it into ChatGPT`));
+  $$('[data-copy-one]').forEach(b => b.onclick = () => {
+    const i = pr.batches.flatMap(x => x.items).find(x => x.slug === b.dataset.copyOne);
+    copyQuiet(`${i.prompt}\n\n(File name: ${i.file})`, 'Prompt copied');
+  });
+  const results = $('[data-results]');
+  const report = (ok, bad) => {
+    results.innerHTML = `${ok.length ? `<p>Imported ${ok.length}: ${ok.map(r => `<a href="#code/${encodeURIComponent(r.slug)}">${esc(r.slug)}</a>`).join(', ')}</p>` : ''}
+      ${bad.length ? `<p class="list problems">${bad.map(b => esc(b)).join('\n')}</p>` : ''}`;
+  };
+  const drop = $('[data-drop]');
+  drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+  drop.ondragleave = () => drop.classList.remove('over');
+  drop.ondrop = async e => {
+    e.preventDefault(); drop.classList.remove('over');
+    const ok = [], bad = [];
+    for (const file of e.dataTransfer.files) {
+      try {
+        const r = await fetch(`/api/code/logos/upload?name=${encodeURIComponent(file.name)}`, { method: 'POST', body: file });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || r.statusText);
+        ok.push(d);
+      } catch (err) { bad.push(`${file.name}: ${err.message}`); }
+    }
+    toast(`${ok.length} logo${ok.length === 1 ? '' : 's'} imported${bad.length ? `, ${bad.length} not matched` : ''}`, !!bad.length);
+    if (ok.length) { await viewCodeLogos(); }
+    report(ok, bad);
+  };
+  $('[data-import]').onclick = () => guard(async () => {
+    const dir = $('[data-dir]').value.trim();
+    if (!dir) return toast('Give a folder', true);
+    const r = await api('POST', '/code/logos/import', { paths: [dir] });
+    toast(`${r.imported.length} imported, ${r.unmatched.length} not matched`);
+    await viewCodeLogos();
+    report(r.imported, r.unmatched.map(u => `${u.file}: ${u.error}`));
+  });
+  const prs = $('[data-prs]');
+  if (prs) prs.onclick = () => confirmLogoPrs(waiting.map(p => p.slug), c, () => viewCodeLogos());
+}
+
+async function viewCodeCategories() {
+  const c = await get('/code');
+  let cats = c.categories.map(x => ({ ...x }));
+  const counts = {};
+  c.projects.filter(p => p.listed).forEach(p => { counts[p.category || ''] = (counts[p.category || ''] || 0) + 1; });
+  main.innerHTML = `
+    <p class="muted small"><a href="#code">Code</a> › Categories &amp; tags</p>
+    <h1>Categories &amp; tags</h1>
+    <p class="sub">The sections of the /code/ page, in order. ${counts[''] ? `<strong>${counts['']}</strong> projects on the website have no category (shown under “Other”).` : ''}</p>
+    <div class="bar"><button class="primary" data-suggest title="Claude reads every project's name, summary, language and topics and proposes categories and tags. You review before anything is saved.">✦ Suggest categories and tags with Claude</button>
+      <span class="muted small">Takes a minute or two for a big catalog.</span></div>
+    <pre class="list claude-log" data-joblog hidden></pre>
+    <div data-scheme></div>
+    <h2>Categories</h2>
+    <div data-cats></div>
+    <div class="bar"><button data-add>Add category</button><span class="grow"></span><button class="primary" data-save>Save categories</button></div>
+    <h2>The catalog page</h2>
+    <label>Title <input data-title value="${esc(c.title)}" placeholder="Code"></label>
+    <label>Introduction <textarea data-intro rows="3">${esc(c.intro)}</textarea></label>
+    <label>GitHub owner (whose repositories Sync reads) <input data-owner value="${esc(c.owner)}" placeholder="your GitHub login"></label>
+    <label>Logo house style — ends every composed logo prompt, so the logos look like a family <textarea data-style rows="5" placeholder="${esc(c.default_logo_style)}">${esc(c.logo_style)}</textarea></label>
+    <div class="bar"><button class="primary" data-save-page>Save</button></div>`;
+  const draw = () => {
+    $('[data-cats]').innerHTML = cats.map((x, i) => `<div class="code-cat-row">
+      <input data-k="id" data-i="${i}" value="${esc(x.id)}" placeholder="id" class="mono" style="width:11rem">
+      <input data-k="title" data-i="${i}" value="${esc(x.title)}" placeholder="Title" style="width:14rem">
+      <input data-k="description" data-i="${i}" value="${esc(x.description || '')}" placeholder="One sentence" style="flex:1">
+      <span class="muted small" style="width:3rem">${counts[x.id] || 0}</span>
+      <button data-up="${i}" ${i ? '' : 'disabled'}>↑</button><button data-down="${i}" ${i < cats.length - 1 ? '' : 'disabled'}>↓</button><button data-del="${i}">×</button></div>`).join('') || '<p class="empty">No categories yet.</p>';
+    $$('[data-k]').forEach(inp => inp.oninput = () => { cats[+inp.dataset.i][inp.dataset.k] = inp.value; });
+    $$('[data-up]').forEach(b => b.onclick = () => { const i = +b.dataset.up; [cats[i - 1], cats[i]] = [cats[i], cats[i - 1]]; draw(); });
+    $$('[data-down]').forEach(b => b.onclick = () => { const i = +b.dataset.down; [cats[i + 1], cats[i]] = [cats[i], cats[i + 1]]; draw(); });
+    $$('[data-del]').forEach(b => b.onclick = () => { cats.splice(+b.dataset.del, 1); draw(); });
+  };
+  draw();
+  $('[data-add]').onclick = () => { cats.push({ id: '', title: '', description: '' }); draw(); $$('[data-k="id"]').pop().focus(); };
+  $('[data-save]').onclick = () => guard(async () => {
+    const list = cats.filter(x => x.id.trim() && x.title.trim());
+    await api('PUT', '/code', { categories: list });
+    toast('Categories saved'); viewCodeCategories();
+  });
+  $('[data-save-page]').onclick = () => guard(async () => {
+    await api('PUT', '/code', { title: $('[data-title]').value, intro: $('[data-intro]').value, owner: $('[data-owner]').value, logo_style: $('[data-style]').value });
+    toast('Saved');
+  });
+  const log = $('[data-joblog]');
+  $('[data-suggest]').onclick = () => startCodeJob('/code/suggest', {}, log, j => { log.hidden = true; if (j.result) showScheme(j.result); });
+  const titleOf = s => (c.projects.find(x => x.slug === s) || {}).display_title || s;
+  const showScheme = s => {
+    const pane = $('[data-scheme]');
+    const rows = Object.entries(s.projects).sort((a, b) => titleOf(a[0]).localeCompare(titleOf(b[0])));
+    pane.innerHTML = `<div class="proposal"><h2>Claude's scheme</h2>
+      <p class="muted small">${s.categories.length} categories for ${rows.length} projects. Edit the categories above after applying if you like.</p>
+      <ol>${s.categories.map(x => `<li><strong>${esc(x.title)}</strong> <span class="mono small">${esc(x.id)}</span> — ${esc(x.description)} <span class="muted small">(${rows.filter(([, v]) => v.category === x.id).length})</span></li>`).join('')}</ol>
+      <details><summary>Every project's category and tags</summary><table><tbody>${rows.map(([slug, v]) => `<tr><td>${esc(titleOf(slug))}</td><td>${esc((s.categories.find(x => x.id === v.category) || {}).title || '—')}</td><td class="small">${(v.tags || []).map(esc).join(', ')}</td></tr>`).join('')}</tbody></table></details>
+      <div class="bar"><label class="inline"><input type="checkbox" data-overwrite> Replace categories and tags projects already have (otherwise only fill gaps and add tags)</label></div>
+      <div class="bar"><button class="primary" data-apply>Apply the scheme</button><button data-discard>Discard</button></div></div>`;
+    $('[data-discard]').onclick = () => (pane.innerHTML = '');
+    $('[data-apply]').onclick = () => guard(async () => {
+      const r = await api('POST', '/code/scheme', { ...s, overwrite: $('[data-overwrite]').checked });
+      toast(`Applied: ${r.applied.categories_set} categories set, ${r.applied.tags_changed} projects' tags changed`);
+      viewCodeCategories();
+    });
+  };
+}
+
+const routes = { companion: viewCompanion, content: viewContent, stories: viewStories, ideas: viewIdeas, registry: viewRegistry, media: viewMedia, models: viewModels, code: viewCode, publish: viewPublish, preview: viewPreview, sites: viewSites };
 
 async function route() {
   const h = location.hash.replace(/^#/, '') || 'content';
@@ -2514,6 +2918,7 @@ async function route() {
   document.onkeydown = null;
   if (!(section === 'story' && live && live.slug === rest[0] && !rest[1])) stopLive();
   if (section !== 'models') stopMeshyPoll();
+  if (section !== 'code') stopCodePoll();
   main.innerHTML = '<p class="muted">Loading…</p>';
   try {
     if (section === 'edit') await viewEditor(decodeURIComponent(rest.join('/')));
@@ -2525,6 +2930,7 @@ async function route() {
       else await viewStory(slug);
     }
     else if (section === 'models') await viewModels(rest);
+    else if (section === 'code') await viewCode(rest);
     else await (routes[section] || viewContent)();
   } catch (e) {
     if (isNoSite(e) && section !== 'sites') { location.hash = '#sites'; return; }

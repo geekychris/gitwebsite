@@ -24,6 +24,7 @@ to find and edit; delete a copied file to go back to the built-in one.
 | `areas.html`, `area.html` | The area tree and each area
 | `lab.html`, `publications.html`, `404.html` | Their pages
 | `models.html`, `models_grid.html`, `model.html` | The 3-D models gallery `/models/` (when no post has `models::gallery[]`), its grid (also rendered into a post by `models::gallery[]`: `cards`, `projects`, `show_chips`, `embedded`), and each model's page (`m` with `used_in`; `heading` and `index_url`: where the gallery is) — see link:integrations.adoc#models-gallery[Integrations]
+| `code.html`, `code_project.html` | The code catalog `/code/` (`code`: `title`, `intro`, `groups` of `cards`, `tags`, `count`) and each project's page (`p`: the card, with `related`, `post_url`, `logo` or `monogram`/`hue`) — see link:integrations.adoc#code-catalog[Integrations]
 | `feed.xml`, `sitemap.xml` | Feed and sitemap
 | `macros.html` | `card`, `row`, `area_tree` — shared building blocks
 |===

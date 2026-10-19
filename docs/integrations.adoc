@@ -274,3 +274,102 @@ has its hero render as its Open Graph image; all are in the sitemap.
 Stories: add a model to a story like a photo — `gw story add <story> media:<key> --comment "…"` —
 and refer to it in the draft as `model::story:<id>[…]`; `gw story draft` writes
 `model::media:<key>[…]`.
+
+[[code-catalog]]
+== The code catalog: your git projects at /code/
+
+`/code/` on the website lists your git projects like the tools page: a search box, category
+chips, and tags (`/code/#tag=amiga`, `/code/#retro`); each project has a page,
+`/code/<slug>/`, with its logo, summary and description, facts from GitHub (language, last push,
+stars, licence), *View on GitHub*, its website, the post that writes it up (found by the post's
+`:repo:`, or set by hand) and related projects (shown on both projects' pages). Hidden projects,
+forks and archived repositories are left out, and so is a project gone from GitHub.
+
+Everything is in `code.yaml` beside `site.yaml`, with the logos in `static/code-logos/` — the build
+reads nothing else, so the site repository alone builds it:
+
+[source,yaml]
+----
+title: Code
+intro: Things I have built and published on GitHub.
+owner: geekychris                 # whose repositories sync reads
+logo_style: …                     # the house style that ends every logo prompt
+categories:                       # the page's sections, in order
+  - { id: retro, title: Retro computing, description: Amiga, 3DO and Atari ST. }
+projects:
+  - slug: amiga-mcp               # /code/amiga-mcp/
+    repo: geekychris/amiga_mcp
+    title: Amiga DevBench         # editorial — edit freely
+    summary: One sentence for the tile.
+    description: |                # paragraphs; `code`, **bold**, [text](https://…), "- " bullets
+      …
+    category: retro
+    tags: [amiga, mcp]
+    related: [amiga-games]
+    hidden: false
+    featured: false               # first in its category
+    logo: amiga-mcp.png           # in static/code-logos/
+    logo_source: repo             # readme | repo | imported
+    logo_prompt: …                # your own prompt (else one is composed)
+    logo_pr: https://github.com/… # the pull request that added an imported logo
+    post: projects/amiga-mcp      # the write-up, when its :repo: does not say
+    github: { … }                 # refreshed by sync — not for editing
+----
+
+=== Sync from GitHub
+
+`gw code sync` (or *Sync from GitHub* on the app's *Code* page) uses the GitHub CLI (`gh`, logged
+in with `gh auth login`) to read the owner's repositories. New public ones are added — forks and
+archived ones hidden, private ones never — and every project's `github:` facts are refreshed. It
+then looks for each project's logo: an image in the README whose name or alt text says logo (or
+icon, banner, mark), else the first image at the top of the README, else a `logo.*` file in the
+repository; badges, template logos (create-react-app's `src/logo.svg`, `logo192.png`) and an image
+shared by several repositories are skipped. Logos are scaled to 256 px (PNG; small SVGs are kept)
+into `static/code-logos/`. `--refresh-logos` looks again for projects that already have one
+(except imported ones); `--no-logos` skips the search.
+
+=== Editing, and improving with Claude
+
+Click a project in the app to edit its title, summary (one sentence; the count shows past 140),
+description, category, tags, related projects, whether it is on the website, featured, its
+write-up post and its logo prompt. *✦ Improve with Claude* has Claude (the `claude` CLI, no tools)
+read the README and propose a title, summary, description, tags, category, up to five related
+projects and a logo idea; you tick what to keep and apply it. The CLI does the same with
+`gw code enhance <slug> [--apply]`, and `gw code set <slug> --summary … --tags a,b --related x,y
+--hide`.
+
+*Categories & tags* edits the category list (order, titles, descriptions), the page's title and
+introduction, the GitHub owner and the logo house style. *✦ Suggest categories and tags with
+Claude* sends every project's name, summary, language and topics and gets back 6–14 categories and
+2–6 tags per project; review it and *Apply* — only projects without a category get one, and tags
+are added, unless you tick *Replace*. CLI: `gw code suggest [--apply] [--overwrite]`,
+`gw code category <id> --title … [--remove]`.
+
+=== Logos from ChatGPT
+
+Projects without a logo each get an image prompt: what the project is (its summary), its language
+and tags, and the house style (a flat vector mark, transparent background, no text, 1024 × 1024).
+An improved project gets Claude's logo idea in its prompt; you can write your own per project.
+
+1. *Code → Logos…* shows the prompts in batches (5–20); *Copy batch N* and paste it into ChatGPT.
+   Each item names the file to save the image as, `<slug>.png`. In a terminal:
+   `gw code logo-prompts --size 10 [--batch 2]`.
+2. Drop the images on the Logos page (or a project's logo box), or *Import folder* — they are
+   matched to projects by file name (`amiga-mcp.png`, `Amiga_MCP (1).png` and `amiga_mcp-logo.webp`
+   all match). `gw code import-logos ~/Downloads/logos`. The site gets a 256 px copy; a 512 px copy
+   is kept in `.gw-cache/code-logos/` for the repository.
+3. *Open N pull requests…* (after you confirm) adds each imported logo to its repository as
+   `assets/logo.png` and centres it at the top of the README, on a branch `gitwebsite/add-logo`,
+   and opens a pull request for you to merge. `gw code logo-pr --all --yes`.
+
+Sync, Claude and pull requests run in the background in `gw serve`, one at a time; the page shows
+their progress. REST: `GET /api/code`, `PUT /api/code` (settings, categories),
+`GET|PUT /api/code/projects/<slug>`, `POST /api/code/sync`, `POST /api/code/projects/<slug>/enhance`,
+`POST /api/code/suggest`, `POST /api/code/scheme`, `GET /api/code/job`,
+`GET /api/code/logo-prompts?size=10`, `POST /api/code/logos/upload?name=…[&slug=…]` (the image as
+the body), `POST /api/code/logos/import {paths}`, `POST /api/code/logo-prs {slugs | all, confirm: true}`,
+`GET /api/code/logo/<file>`. MCP: `code_list`, `code_get` (with the README, for writing),
+`code_update`, `code_category`, `code_apply_scheme`, `code_sync`, `code_logo_prompts`, `code_logo_pr`.
+
+The pages use the templates `code.html` and `code_project.html` and `static/css/code.css` and
+`static/js/code.js`. Add `{ label: Code, href: /code/ }` to `nav:` in site.yaml to put it in the menu.

@@ -434,6 +434,110 @@ async fn site_models_put(State(st): State<AppState>, Json(b): Json<crate::integr
     .await
 }
 
+// ------------------------------------------------------------------ handlers: the code catalog
+
+mod code_api {
+    //! The code catalog (code.yaml, /code/): see [`crate::integrations::code_catalog`]. Sync,
+    //! Claude and pull requests run as one background job at a time, followed with GET /api/code/job.
+    use super::*;
+    use crate::integrations::code_catalog as cc;
+
+    /// GET /api/code — the catalog, every project, counts, and the current job.
+    pub async fn state(State(st): State<AppState>) -> ApiResult {
+        with_site(&st, cc::state).await
+    }
+    /// PUT /api/code — title, intro, owner, logo_style, categories (the whole list).
+    pub async fn settings(State(st): State<AppState>, Json(b): Json<cc::Settings>) -> ApiResult {
+        with_site(&st, move |s| cc::settings(s, &b)).await
+    }
+    pub async fn project(State(st): State<AppState>, AxPath(slug): AxPath<String>) -> ApiResult {
+        with_site(&st, move |s| cc::show(s, &slug)).await
+    }
+    /// PUT /api/code/projects/{slug} — change fields (see `Patch`).
+    pub async fn project_put(State(st): State<AppState>, AxPath(slug): AxPath<String>, Json(b): Json<cc::Patch>) -> ApiResult {
+        with_site(&st, move |s| cc::update(s, &slug, &b)).await
+    }
+    #[derive(Deserialize, Default)]
+    #[serde(default)]
+    pub struct SyncBody {
+        no_logos: bool,
+        refresh_logos: bool,
+    }
+    /// POST /api/code/sync {no_logos?, refresh_logos?} — starts the job.
+    pub async fn sync(State(st): State<AppState>, body: Option<Json<SyncBody>>) -> ApiResult {
+        let b = body.map(|b| b.0).unwrap_or_default();
+        with_site(&st, move |s| cc::start_sync(s, !b.no_logos, b.refresh_logos)).await
+    }
+    /// POST /api/code/projects/{slug}/enhance — starts Claude on a proposal (the job's result).
+    pub async fn enhance(State(st): State<AppState>, AxPath(slug): AxPath<String>) -> ApiResult {
+        with_site(&st, move |s| cc::start_enhance(s, &slug)).await
+    }
+    /// POST /api/code/suggest — starts Claude on categories and tags (the job's result).
+    pub async fn suggest(State(st): State<AppState>) -> ApiResult {
+        with_site(&st, cc::start_suggest).await
+    }
+    /// POST /api/code/scheme {categories, projects: {slug: {category, tags}}, overwrite}
+    pub async fn scheme(State(st): State<AppState>, Json(b): Json<cc::Scheme>) -> ApiResult {
+        with_site(&st, move |s| cc::apply_scheme(s, &b)).await
+    }
+    pub async fn job() -> Json<Value> {
+        Json(cc::job())
+    }
+    #[derive(Deserialize)]
+    pub struct PromptsQuery {
+        size: Option<usize>,
+    }
+    pub async fn prompts(State(st): State<AppState>, Query(q): Query<PromptsQuery>) -> ApiResult {
+        with_site(&st, move |s| cc::logo_prompts(s, q.size.unwrap_or(10).clamp(1, 50))).await
+    }
+    #[derive(Deserialize)]
+    pub struct UploadQuery {
+        name: String,
+        slug: Option<String>,
+    }
+    /// POST /api/code/logos/upload?name=<file name>[&slug=<slug>] with the image as the body.
+    pub async fn upload(State(st): State<AppState>, Query(q): Query<UploadQuery>, body: axum::body::Bytes) -> ApiResult {
+        with_site(&st, move |s| cc::import_logo(s, q.slug.as_deref(), &q.name, &body)).await
+    }
+    #[derive(Deserialize)]
+    pub struct ImportBody {
+        paths: Vec<PathBuf>,
+    }
+    /// POST /api/code/logos/import {paths: [file or folder…]}
+    pub async fn import(State(st): State<AppState>, Json(b): Json<ImportBody>) -> ApiResult {
+        with_site(&st, move |s| cc::import_logos(s, &b.paths)).await
+    }
+    #[derive(Deserialize)]
+    pub struct PrBody {
+        #[serde(default)]
+        slugs: Vec<String>,
+        #[serde(default)]
+        all: bool,
+        #[serde(default)]
+        confirm: bool,
+    }
+    /// POST /api/code/logo-prs {slugs | all, confirm: true} — opens pull requests (a job).
+    pub async fn logo_prs(State(st): State<AppState>, Json(b): Json<PrBody>) -> ApiResult {
+        if !b.confirm {
+            return Err(ApiError::bad("opening pull requests needs confirm: true"));
+        }
+        with_site(&st, move |s| {
+            let slugs = if b.all { cc::awaiting_pr(s)? } else { b.slugs };
+            cc::start_logo_prs(s, slugs)
+        })
+        .await
+    }
+    /// GET /api/code/logo/{file} — a logo from static/code-logos/.
+    pub async fn logo(State(st): State<AppState>, AxPath(file): AxPath<String>) -> Response {
+        if !gw_core::codecat::safe_logo(&file) {
+            return StatusCode::NOT_FOUND.into_response();
+        }
+        let Ok(root) = st.root() else { return StatusCode::NOT_FOUND.into_response() };
+        let p = root.join("static").join(gw_core::codecat::LOGO_DIR).join(&file);
+        file_response(&p).unwrap_or_else(|| StatusCode::NOT_FOUND.into_response())
+    }
+}
+
 // ------------------------------------------------------------------ handlers: stories
 
 async fn stories_list(State(st): State<AppState>) -> ApiResult {
@@ -1142,6 +1246,18 @@ fn router_for(st: AppState) -> Router {
         .route("/api/stories/{slug}/request-changes", post(story_request_changes))
         .route("/api/stories/{slug}/claude", get(story_claude_status).post(story_claude_start).delete(story_claude_stop))
         .route("/api/site-models", get(site_models_get).put(site_models_put))
+        .route("/api/code", get(code_api::state).put(code_api::settings))
+        .route("/api/code/job", get(code_api::job))
+        .route("/api/code/sync", post(code_api::sync))
+        .route("/api/code/suggest", post(code_api::suggest))
+        .route("/api/code/scheme", post(code_api::scheme))
+        .route("/api/code/logo-prompts", get(code_api::prompts))
+        .route("/api/code/logos/upload", post(code_api::upload).layer(axum::extract::DefaultBodyLimit::max(32 * 1024 * 1024)))
+        .route("/api/code/logos/import", post(code_api::import))
+        .route("/api/code/logo-prs", post(code_api::logo_prs))
+        .route("/api/code/logo/{file}", get(code_api::logo))
+        .route("/api/code/projects/{slug}", get(code_api::project).put(code_api::project_put))
+        .route("/api/code/projects/{slug}/enhance", post(code_api::enhance))
         .route("/api/meshy/status", get(meshy_api::status))
         .route("/api/meshy/sync", post(meshy_api::sync))
         .route("/api/meshy/models", get(meshy_api::models))

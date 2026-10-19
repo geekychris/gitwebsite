@@ -11,6 +11,8 @@ pub const TEMPLATES: &[(&str, &str)] = &[
     ("area.html", include_str!("../theme/templates/area.html")),
     ("areas.html", include_str!("../theme/templates/areas.html")),
     ("article.html", include_str!("../theme/templates/article.html")),
+    ("code.html", include_str!("../theme/templates/code.html")),
+    ("code_project.html", include_str!("../theme/templates/code_project.html")),
     ("base.html", include_str!("../theme/templates/base.html")),
     ("feed.xml", include_str!("../theme/templates/feed.xml")),
     ("home.html", include_str!("../theme/templates/home.html")),
@@ -32,6 +34,8 @@ pub const TEMPLATES: &[(&str, &str)] = &[
 /// `(path under static/, bytes)` for every built-in asset.
 pub const STATIC: &[(&str, &[u8])] = &[
     ("css/site.css", include_bytes!("../theme/static/css/site.css")),
+    ("css/code.css", include_bytes!("../theme/static/css/code.css")),
+    ("js/code.js", include_bytes!("../theme/static/js/code.js")),
     ("css/models.css", include_bytes!("../theme/static/css/models.css")),
     ("images/favicon.svg", include_bytes!("../theme/static/images/favicon.svg")),
     ("js/models.js", include_bytes!("../theme/static/js/models.js")),

@@ -126,6 +126,10 @@ enum Cmd {
     /// and copying their pictures into the site, `sync-site`) and the models in posts (in, add, remove).
     #[command(subcommand)]
     Models(integrations::site_models::ModelsCmd),
+    /// The code catalog (/code/): your git projects — sync from GitHub, edit, categories and
+    /// tags, improve the text with Claude, logo prompts for ChatGPT, import logos, logo PRs.
+    #[command(subcommand)]
+    Code(integrations::code_catalog::CodeCmd),
     /// Project stories: photos + notes + an interview → a post (see `/project-story`).
     #[command(subcommand)]
     Story(StoryCmd),
@@ -776,6 +780,13 @@ fn main() -> Result<()> {
         }
         Cmd::Smugmug(c) => integrations::smugmug::run(&site, c)?,
         Cmd::Models(c) => integrations::site_models::run_cli(&site, c)?,
+        Cmd::Code(c) => {
+            let v = integrations::code_catalog::run_cli(&site, c)?;
+            if v.is_null() {
+                return Ok(());
+            }
+            v
+        }
         Cmd::Wordpress(c) => integrations::wordpress::run(&site, c)?,
         Cmd::Build { drafts } => ops::do_build(&site, drafts)?,
         Cmd::Check => {

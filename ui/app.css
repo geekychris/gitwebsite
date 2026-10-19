@@ -324,3 +324,28 @@ button.mic:hover, button.mic:focus-visible { opacity: 1; border-color: var(--lin
 .pick-model .pick-grid { max-height: calc(100vh - 220px); overflow: auto; }
 .pick-model .model-card { font: inherit; text-align: left; padding: 0; cursor: pointer; }
 .pick-model .model-card:disabled { opacity: .6; cursor: progress; }
+
+/* Code (the code catalog) */
+.code-logo { flex: none; width: 44px; height: 44px; border-radius: 10px; object-fit: contain; background: var(--wash); display: inline-block; vertical-align: middle; }
+.code-mono { display: inline-grid; place-items: center; font: 750 1rem/1 var(--sans); color: hsl(var(--h) 45% 32%); background: hsl(var(--h) 60% 92%); }
+@media (prefers-color-scheme: dark) { .code-mono { color: hsl(var(--h) 60% 80%); background: hsl(var(--h) 25% 22%); } }
+.code-head-app { display: flex; gap: 1rem; align-items: center; margin: .4rem 0 .6rem; }
+.code-head-app .code-mono { font-size: 1.6rem; }
+.code-edit { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 1.4rem; align-items: start; }
+@media (max-width: 1000px) { .code-edit { grid-template-columns: 1fr; } }
+.code-fields, .code-side { display: flex; flex-direction: column; gap: .8rem; }
+.code-logo-box { border: 2px dashed var(--line); border-radius: var(--radius); padding: 1rem; text-align: center; background: var(--surface); }
+.code-logo-box.over { border-color: var(--accent); }
+.code-logo-box .code-mono { font-size: 3rem; }
+.code-logo-box p { margin: .5rem 0 0; }
+.code-related-edit { display: flex; flex-wrap: wrap; gap: .3rem; min-height: 1.6rem; font-weight: 500; }
+.code-related-edit .x { border: 0; background: none; padding: 0 .1rem; font-size: .9rem; color: var(--muted); }
+.code-table td { vertical-align: top; }
+.code-proposal .code-prop-row { border-top: 1px solid var(--line); padding: .6rem 0; }
+.code-prop-text { white-space: pre-wrap; font-size: .88rem; max-height: 14rem; overflow: auto; }
+.code-batch { margin: 0 0 1rem; }
+.code-prompts { margin: 0; padding-left: 1.4rem; display: flex; flex-direction: column; gap: .6rem; }
+.code-prompts button { padding: .1rem .5rem; margin-left: .4rem; }
+.code-logo-strip { display: flex; flex-wrap: wrap; gap: .8rem; margin: .6rem 0; }
+.code-logo-strip a { display: flex; flex-direction: column; align-items: center; gap: .2rem; width: 84px; text-align: center; text-decoration: none; color: var(--ink); }
+.code-cat-row { display: flex; gap: .4rem; align-items: center; margin: 0 0 .4rem; }

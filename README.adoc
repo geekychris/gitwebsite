@@ -24,6 +24,10 @@ are about.
   the page, and proposes a revision you review as a diff.
 * *Several sites*: switch between them in the app or with `gw config use`.
 * Optional *WordPress* import and cross-posting.
+* *Code catalog*: every git project at `/code/` — categories, search and tags like the tools page,
+  a page per project with its logo, description and related projects. Synced from GitHub; text
+  improved with Claude; missing logos as batches of ChatGPT prompts, imported back and added to
+  each repository's README by pull request.
 * *Meshy models*: keeps a git repository of your Meshy.ai 3D models in step with your account —
   a free scheduled sync in the app, a Models page with every view and README, and paid recovery of
   expired models only when you confirm the credits.
@@ -87,7 +91,7 @@ All in `docs/` (AsciiDoc; `make docs` renders `docs/index.html`):
 * link:docs/publishing.adoc[Building, previewing, and publishing]
 * link:docs/registry-and-ideas.adoc[Registry and ideas]
 * link:docs/interfaces.adoc[Interfaces] — CLI, REST, MCP, desktop app, skills
-* link:docs/integrations.adoc[Integrations] — SmugMug, WordPress and Meshy models (optional)
+* link:docs/integrations.adoc[Integrations] — SmugMug, WordPress, Meshy models and the code catalog (optional)
 * link:docs/companion.adoc[The companion] — relays for the site's browser tools (HTTP, TCP, Docker, Kubernetes, git), pairing, tool windows, MCP `tool_open`
 * link:docs/templates.adoc[Templates and layouts]
 

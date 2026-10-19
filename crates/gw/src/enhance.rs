@@ -225,7 +225,7 @@ fn extra_dirs() -> Vec<PathBuf> {
 
 /// `env` if set, then the usual install locations, then PATH — skipping temporary directories
 /// (a terminal session's shims there vanish when it ends, while the app keeps running).
-fn find_program(name: &str, env: &str) -> Option<PathBuf> {
+pub(crate) fn find_program(name: &str, env: &str) -> Option<PathBuf> {
     if let Some(p) = std::env::var_os(env).map(PathBuf::from).filter(|p| executable(p)) {
         return Some(p);
     }
