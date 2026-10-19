@@ -923,7 +923,14 @@ fn collect_images(dir: &Path) -> Result<Vec<(PathBuf, PathBuf)>> {
             let to = dir.join(".unzipped").join(name.trim_end_matches(".zip"));
             let _ = std::fs::remove_dir_all(&to);
             std::fs::create_dir_all(&to)?;
-            let ok = Command::new("/usr/bin/ditto").args(["-x", "-k"]).arg(&p).arg(&to).status().map(|s| s.success()).unwrap_or(false);
+            // ditto on macOS, unzip elsewhere.
+            let ok = if Path::new("/usr/bin/ditto").exists() {
+                Command::new("/usr/bin/ditto").args(["-x", "-k"]).arg(&p).arg(&to).status()
+            } else {
+                Command::new("unzip").args(["-q", "-o"]).arg(&p).arg("-d").arg(&to).status()
+            }
+            .map(|s| s.success())
+            .unwrap_or(false);
             if !ok {
                 continue;
             }
