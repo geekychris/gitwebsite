@@ -1133,7 +1133,19 @@ pub fn logo_pr(site: &Site, slug: &str, merge: bool, log: &dyn Fn(String)) -> Re
     // Merging (squash) is optional; a PR that can't be merged stays open and is still recorded.
     let merged = if merge {
         let n = pr["number"].as_u64().context("GitHub did not return the PR number")?;
-        match gh_send("PUT", &format!("repos/{repo}/pulls/{n}/merge"), &json!({ "merge_method": "squash", "commit_title": format!("Add a project logo (#{n})") })) {
+        // Right after the PR opens GitHub may still answer "Base branch was modified" (405).
+        let body = json!({ "merge_method": "squash", "commit_title": format!("Add a project logo (#{n})") });
+        let mut tries = 0;
+        let res = loop {
+            match gh_send("PUT", &format!("repos/{repo}/pulls/{n}/merge"), &body) {
+                Err(e) if tries < 4 && format!("{e:#}").contains("Base branch was modified") => {
+                    tries += 1;
+                    std::thread::sleep(std::time::Duration::from_secs(5 * tries));
+                }
+                r => break r,
+            }
+        };
+        match res {
             Ok(_) => {
                 log(format!("{repo}: merged"));
                 if let Err(e) = gh_raw(&["api", "-X", "DELETE", &format!("repos/{repo}/git/refs/heads/{}", enc_path(&head))], None) {
