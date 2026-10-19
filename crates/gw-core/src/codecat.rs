@@ -622,6 +622,26 @@ pub fn readme_with_logo(readme: &str, img_path: &str, alt: &str) -> String {
     format!("{head}{block}{}", rest.trim_start_matches('\n'))
 }
 
+/// An AsciiDoc README with the logo centred at the top: after the document header (`= Title`
+/// and its attribute lines), so the title stays the document title. Unchanged when the README
+/// already shows that image.
+pub fn adoc_readme_with_logo(readme: &str, img_path: &str, alt: &str) -> String {
+    if readme.contains(img_path) {
+        return readme.to_string();
+    }
+    let block = format!("image::{img_path}[{},180,align=center]\n\n", alt.replace([']', ','], " "));
+    let lines: Vec<&str> = readme.split_inclusive('\n').collect();
+    let first = lines.iter().position(|l| !l.trim().is_empty() && !l.starts_with("//"));
+    let at = match first {
+        Some(i) if lines[i].starts_with("= ") => lines[i..].iter().position(|l| l.trim().is_empty()).map(|j| i + j + 1).unwrap_or(lines.len()),
+        _ => 0,
+    };
+    let head: String = lines[..at].concat();
+    let rest: String = lines[at..].concat();
+    let head = if at == lines.len() && !head.is_empty() { format!("{}\n\n", head.trim_end()) } else { head };
+    format!("{head}{block}{}", rest.trim_start_matches('\n'))
+}
+
 /// Where a logo goes in a repository: `assets/logo.<ext>`, unless the repository already keeps
 /// its logo somewhere.
 pub fn repo_logo_path(p: &Project, ext: &str) -> String {
@@ -927,6 +947,15 @@ pub fn pages(c: &Catalog, static_dir: &Path, posts: &[PostRef], base_url: &str, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adoc_logo_goes_after_the_header() {
+        let r = adoc_readme_with_logo("= My Tool\n:toc:\n\nText.\n", "assets/logo.png", "My Tool logo");
+        assert_eq!(r, "= My Tool\n:toc:\n\nimage::assets/logo.png[My Tool logo,180,align=center]\n\nText.\n");
+        assert_eq!(adoc_readme_with_logo(&r, "assets/logo.png", "x"), r);
+        assert_eq!(adoc_readme_with_logo("Just text.\n", "a.png", "A"), "image::a.png[A,180,align=center]\n\nJust text.\n");
+        assert_eq!(adoc_readme_with_logo("= Only\n", "a.png", "A"), "= Only\n\nimage::a.png[A,180,align=center]\n\n");
+    }
 
     fn tmp(name: &str) -> PathBuf {
         static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);

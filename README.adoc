@@ -1,5 +1,7 @@
 = gitwebsite
 
+image::assets/logo.png[gitwebsite logo,180,align=center]
+
 Build, curate, and publish a personal or project website from AsciiDoc kept in git — with a
 desktop app, a command line, and Claude as a writing partner that can read the code your posts
 are about.

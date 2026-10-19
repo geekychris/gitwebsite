@@ -1099,9 +1099,12 @@ pub fn logo_pr(site: &Site, slug: &str, merge: bool, log: &dyn Fn(String)) -> Re
         None => ("README.md".to_string(), None, format!("# {title}\n\n{}\n", p.display_summary())),
     };
     let dir = readme_path.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default();
-    let is_md = readme_path.to_ascii_lowercase().ends_with(".md") || !readme_path.contains('.');
-    if is_md {
-        let updated = codecat::readme_with_logo(&readme, &relative(&dir, &logo_path), &format!("{title} logo"));
+    let lower = readme_path.to_ascii_lowercase();
+    let is_adoc = lower.ends_with(".adoc") || lower.ends_with(".asciidoc");
+    if is_adoc || lower.ends_with(".md") || !readme_path.contains('.') {
+        let img = relative(&dir, &logo_path);
+        let alt = format!("{title} logo");
+        let updated = if is_adoc { codecat::adoc_readme_with_logo(&readme, &img, &alt) } else { codecat::readme_with_logo(&readme, &img, &alt) };
         if updated != readme {
             let mut body = json!({ "message": "Show the project logo at the top of the README", "content": base64::engine::general_purpose::STANDARD.encode(updated.as_bytes()), "branch": head });
             if let Some(s) = readme_sha {
@@ -1111,7 +1114,7 @@ pub fn logo_pr(site: &Site, slug: &str, merge: bool, log: &dyn Fn(String)) -> Re
             log(format!("{repo}: logo added to {readme_path}"));
         }
     } else {
-        log(format!("{repo}: {readme_path} is not Markdown; only the logo file is added"));
+        log(format!("{repo}: {readme_path} is neither Markdown nor AsciiDoc; only the logo file is added"));
     }
     let pr = gh_send("POST", &format!("repos/{repo}/pulls"), &json!({
         "title": "Add a project logo",
