@@ -67,8 +67,31 @@ pub struct Catalog {
     pub logo_style: String,
     #[serde(default)]
     pub categories: Vec<Category>,
+    /// Logo families: one mark shared by every project that names the family.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub families: Vec<Family>,
     #[serde(default)]
     pub projects: Vec<Project>,
+}
+
+/// A logo family: projects that share one mark (e.g. the modules of one framework). Its logo is
+/// rendered once (`family-<id>.png`) and used by each member without a logo of its own.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct Family {
+    pub id: String,
+    pub title: String,
+    /// What the family is, for the prompt.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    /// The mark's idea, e.g. "a stylised red bull".
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub concept: String,
+    /// A hand-written prompt (else one is composed from the above and the house style).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub logo_prompt: String,
+    /// File name in `static/code-logos/` (`family-<id>.<ext>`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub logo: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -121,6 +144,9 @@ pub struct Project {
     /// The post that writes the project up (content id); else found by its `:repo:`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub post: String,
+    /// The logo family it belongs to (its mark is used when the project has no logo of its own).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub family: String,
     /// When the text was last improved with Claude (YYYY-MM-DD).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub enhanced: String,
@@ -292,6 +318,23 @@ impl Catalog {
                 bail!("{}: logo {:?} must be <slug>.png|jpg|webp|svg|gif in {LOGO_DIR}/", p.slug, p.logo);
             }
         }
+        let mut fams = BTreeSet::new();
+        for f in &self.families {
+            if !safe_slug(&f.id) {
+                bail!("family id {:?}: lower-case letters, digits and '-' only", f.id);
+            }
+            if !fams.insert(f.id.as_str()) {
+                bail!("family {} is listed twice", f.id);
+            }
+            if !f.logo.is_empty() && !safe_logo(&f.logo) {
+                bail!("family {}: logo {:?} must be family-<id>.png|jpg|webp|svg|gif", f.id, f.logo);
+            }
+        }
+        for p in self.projects.iter().filter(|p| !p.family.is_empty()) {
+            if !fams.contains(p.family.as_str()) {
+                bail!("{}: family {} is not in families", p.slug, p.family);
+            }
+        }
         let mut ids = BTreeSet::new();
         for c in &self.categories {
             if !safe_slug(&c.id) {
@@ -309,7 +352,7 @@ impl Catalog {
             "# The code catalog (/code/): the site's git projects. Edit in the gitwebsite app's Code page or\n\
              # by hand; `gw code sync` adds new repositories and refreshes each project's github: facts and\n\
              # logo (static/{LOGO_DIR}/). Editorial fields: title, summary, description, category, tags,\n\
-             # related (slugs), hidden, featured, order, logo_prompt, post.\n{}",
+             # related (slugs), hidden, featured, order, logo_prompt, post, family (a logo family's id).\n{}",
             serde_yaml::to_string(self)?
         ))
     }
@@ -343,6 +386,18 @@ impl Catalog {
             n += 1;
         }
         s
+    }
+
+    pub fn family(&self, id: &str) -> Option<&Family> {
+        self.families.iter().find(|f| f.id == id)
+    }
+
+    /// The logo a project shows: its own, else its family's. (file, from the family)
+    pub fn logo_of<'a>(&'a self, p: &'a Project) -> Option<(&'a str, bool)> {
+        if !p.logo.is_empty() {
+            return Some((&p.logo, false));
+        }
+        self.family(&p.family).filter(|f| !f.logo.is_empty()).map(|f| (f.logo.as_str(), true))
     }
 
     pub fn style(&self) -> &str {
@@ -446,16 +501,59 @@ pub struct PromptItem {
     pub prompt: String,
 }
 
-/// The projects that need a logo (listed, none yet), in display order, split into batches.
+/// The prompt for a family's shared mark.
+pub fn family_prompt(cat: &Catalog, f: &Family) -> String {
+    if !f.logo_prompt.trim().is_empty() {
+        return f.logo_prompt.trim().to_string();
+    }
+    let n = cat.projects.iter().filter(|p| p.family == f.id && p.listed()).count();
+    let mut s = format!("Design a logo mark for \"{}\", a family of {n} related software projects on GitHub that will all share this one mark.", f.title);
+    if !f.description.trim().is_empty() {
+        s.push_str(&format!(" What it is: {}.", f.description.trim().trim_end_matches('.')));
+    }
+    if !f.concept.trim().is_empty() {
+        s.push_str(&format!(" The mark: {}.", f.concept.trim().trim_end_matches('.')));
+    } else {
+        s.push_str(" Use a symbol or metaphor that suggests what the family does, not a generic code or gear icon.");
+    }
+    s.push(' ');
+    s.push_str(cat.style());
+    s
+}
+
+/// The file a family's rendered mark is saved as.
+pub fn family_file(id: &str) -> String {
+    format!("family-{id}.png")
+}
+
+/// The logos still needed — each family without a mark (if it has listed members), then the
+/// listed projects with no logo and no family mark — in display order, split into batches.
 pub fn logo_batches(cat: &Catalog, size: usize) -> Vec<Vec<PromptItem>> {
     let size = size.max(1);
-    let items: Vec<PromptItem> = cat
-        .ordered()
-        .into_iter()
-        .filter(|p| p.logo.is_empty())
-        .map(|p| PromptItem { slug: p.slug.clone(), title: p.display_title(), repo: p.repo.clone(), file: format!("{}.png", p.slug), prompt: logo_prompt(cat, p) })
+    let mut items: Vec<PromptItem> = cat
+        .families
+        .iter()
+        .filter(|f| f.logo.is_empty() && cat.projects.iter().any(|p| p.family == f.id && p.listed()))
+        .map(|f| PromptItem { slug: format!("family-{}", f.id), title: format!("{} (family mark)", f.title), repo: String::new(), file: family_file(&f.id), prompt: family_prompt(cat, f) })
         .collect();
+    items.extend(
+        cat.ordered()
+            .into_iter()
+            .filter(|p| p.logo.is_empty() && (p.family.is_empty() || cat.family(&p.family).is_none()))
+            .map(|p| PromptItem { slug: p.slug.clone(), title: p.display_title(), repo: p.repo.clone(), file: format!("{}.png", p.slug), prompt: logo_prompt(cat, p) }),
+    );
     items.chunks(size).map(|c| c.to_vec()).collect()
+}
+
+/// Match a rendered image's file name to a family: `family-hitorro.png`, `Family_HiTorro (1).png`.
+pub fn match_family_file<'a>(cat: &'a Catalog, file_name: &str) -> Option<&'a Family> {
+    let (stem, ext) = file_name.rsplit_once('.')?;
+    if !LOGO_EXTS.contains(&ext.to_ascii_lowercase().as_str()) {
+        return None;
+    }
+    let s = slug_for(stem);
+    let id = s.strip_prefix("family-")?;
+    cat.family(id).or_else(|| id.rsplit_once('-').filter(|(_, n)| n.len() <= 2 && n.chars().all(|c| c.is_ascii_digit())).and_then(|(a, _)| cat.family(a)))
 }
 
 /// A batch as text to paste into ChatGPT: one numbered prompt per logo, each naming its file.
@@ -612,6 +710,11 @@ pub fn check(site_root: &Path, static_dir: &Path) -> Vec<String> {
             out.push(format!("{FILE}: {}: logo {LOGO_DIR}/{} is missing (gw code sync)", p.slug, p.logo));
         }
     }
+    for f in c.families.iter().filter(|f| !f.logo.is_empty()) {
+        if !static_dir.join(LOGO_DIR).join(&f.logo).is_file() {
+            out.push(format!("{FILE}: family {}: logo {LOGO_DIR}/{} is missing", f.id, f.logo));
+        }
+    }
     out
 }
 
@@ -723,11 +826,11 @@ fn norm_repo_url(u: &str) -> String {
 pub fn pages(c: &Catalog, static_dir: &Path, posts: &[PostRef], base_url: &str, warnings: &mut Vec<String>) -> Pages {
     let base = base_url.trim_end_matches('/');
     let logo_url = |p: &Project| -> String {
-        if p.logo.is_empty() {
-            return String::new();
-        }
         // A missing file is reported by check(); the tile falls back to a monogram.
-        if static_dir.join(LOGO_DIR).join(&p.logo).is_file() { format!("/{LOGO_DIR}/{}", p.logo) } else { String::new() }
+        match c.logo_of(p) {
+            Some((f, _)) if static_dir.join(LOGO_DIR).join(f).is_file() => format!("/{LOGO_DIR}/{f}"),
+            _ => String::new(),
+        }
     };
     let mini = |p: &Project, logo: String| Mini { url: format!("{URL}{}/", p.slug), title: p.display_title(), summary: p.display_summary(), logo, monogram: monogram(&p.display_title()), hue: hue(&p.slug) };
     let logos: BTreeMap<String, String> = c.projects.iter().filter(|p| p.listed()).map(|p| (p.slug.clone(), logo_url(p))).collect();
@@ -887,6 +990,29 @@ mod tests {
         assert_eq!(b[0][1].prompt, "My own prompt");
         let t = batch_text(&b[0], 1, 1);
         assert!(t.contains("Logo batch 1 of 1: 2 logos") && t.contains("1. File name: amiga-games.png") && t.contains("2. File name: gw.png"));
+    }
+
+    #[test]
+    fn logo_families_share_one_mark() {
+        let mut c = Catalog::parse(&format!("{SAMPLE}families:\n  - {{ id: amiga, title: Amiga tools, concept: a bouncing ball }}\n")).unwrap();
+        for s in ["amiga-mcp", "amiga-games"] {
+            c.get_mut(s).unwrap().family = "amiga".into();
+        }
+        c.validate().unwrap();
+        let items: Vec<PromptItem> = logo_batches(&c, 50).concat();
+        assert_eq!(items[0].file, "family-amiga.png");
+        assert!(items[0].prompt.contains("family of 2 related") && items[0].prompt.contains("The mark: a bouncing ball."));
+        assert!(!items.iter().any(|i| i.slug == "amiga-games"), "members wait for the family mark");
+        assert_eq!(c.logo_of(c.get("amiga-games").unwrap()), None);
+        c.families[0].logo = "family-amiga.png".into();
+        assert_eq!(c.logo_of(c.get("amiga-games").unwrap()), Some(("family-amiga.png", true)));
+        assert_eq!(c.logo_of(c.get("amiga-mcp").unwrap()), Some(("amiga-mcp.png", false)), "its own logo wins");
+        assert!(!logo_batches(&c, 50).concat().iter().any(|i| i.slug.starts_with("family-")));
+        assert_eq!(match_family_file(&c, "Family_Amiga (1).png").map(|f| f.id.as_str()), Some("amiga"));
+        assert!(match_family_file(&c, "amiga-games.png").is_none());
+        let mut bad = c.clone();
+        bad.get_mut("gw").unwrap().family = "nope".into();
+        assert!(bad.validate().is_err());
     }
 
     #[test]

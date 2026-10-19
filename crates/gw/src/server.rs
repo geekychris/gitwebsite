@@ -476,6 +476,10 @@ mod code_api {
     pub async fn suggest(State(st): State<AppState>) -> ApiResult {
         with_site(&st, cc::start_suggest).await
     }
+    /// POST /api/code/family {id, title?, description?, concept?, logo_prompt?, add?, categories?, drop?, remove?}
+    pub async fn family(State(st): State<AppState>, Json(b): Json<cc::FamilyChange>) -> ApiResult {
+        with_site(&st, move |s| cc::family(s, &b)).await
+    }
     /// POST /api/code/scheme {categories, projects: {slug: {category, tags}}, overwrite}
     pub async fn scheme(State(st): State<AppState>, Json(b): Json<cc::Scheme>) -> ApiResult {
         with_site(&st, move |s| cc::apply_scheme(s, &b)).await
@@ -1251,6 +1255,7 @@ fn router_for(st: AppState) -> Router {
         .route("/api/code/sync", post(code_api::sync))
         .route("/api/code/suggest", post(code_api::suggest))
         .route("/api/code/scheme", post(code_api::scheme))
+        .route("/api/code/family", post(code_api::family))
         .route("/api/code/logo-prompts", get(code_api::prompts))
         .route("/api/code/logos/upload", post(code_api::upload).layer(axum::extract::DefaultBodyLimit::max(32 * 1024 * 1024)))
         .route("/api/code/logos/import", post(code_api::import))

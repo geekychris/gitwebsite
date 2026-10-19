@@ -238,7 +238,11 @@ fn tools() -> Value {
          "inputSchema": s(json!({"slug": str_("Project slug"), "title": str_("Display name"), "summary": str_("One sentence for the tile, ≤140 chars"),
             "description": str_("The project page's text"), "category": str_("Category id"), "tags": arr("Tags (replaces)"), "related": arr("Related project slugs (replaces)"),
             "hidden": {"type": "boolean"}, "featured": {"type": "boolean"}, "logo_prompt": str_("A hand-written image prompt for its logo"),
-            "post": str_("Content id of the post that writes it up (if not found by its :repo:)"), "enhanced": {"type": "boolean"}}), &["slug"])},
+            "post": str_("Content id of the post that writes it up (if not found by its :repo:)"), "enhanced": {"type": "boolean"},
+            "family": str_("Logo family id (its shared mark is used when the project has no logo); \"\" to leave it")}), &["slug"])},
+        {"name": "code_family", "description": "Add or change a code-catalog logo family: projects that share one mark (e.g. a framework's modules). Give the mark's idea as concept; add members by slug (add) or by category (categories). Its prompt then appears in code_logo_prompts as one item (file family-<id>.png); remove deletes the family.",
+         "inputSchema": s(json!({"id": str_("Short kebab-case id"), "title": str_("Name"), "description": str_("What the family is"), "concept": str_("The mark's idea, e.g. a stylised red bull"),
+            "logo_prompt": str_("A hand-written prompt instead"), "add": arr("Project slugs to add"), "categories": arr("Add every project in these categories"), "drop": arr("Project slugs to take out"), "remove": {"type": "boolean"}}), &["id"])},
         {"name": "code_category", "description": "Add or change a code-catalog category (id, title, description), or remove it (its projects lose the category).",
          "inputSchema": s(json!({"id": str_("Short kebab-case id"), "title": str_("Title"), "description": str_("One sentence"), "remove": {"type": "boolean"}}), &["id"])},
         {"name": "code_apply_scheme", "description": "Set the code catalog's categories and each project's category and tags at once. categories replaces the list (in display order). Projects keep a category they have unless overwrite=true; tags are added (replaced with overwrite).",
@@ -317,7 +321,7 @@ fn call(root: &PathBuf, name: &str, a: &Value) -> Result<Value> {
             })
         }
         "post_models" => crate::integrations::site_models::post_models(&site, req(a, "id")?),
-        "code_list" | "code_get" | "code_update" | "code_category" | "code_apply_scheme" | "code_sync" | "code_logo_prompts" | "code_logo_pr" => {
+        "code_list" | "code_get" | "code_update" | "code_category" | "code_family" | "code_apply_scheme" | "code_sync" | "code_logo_prompts" | "code_logo_pr" => {
             use crate::integrations::code_catalog as cc;
             let strs = |k: &str| a.get(k).and_then(|v| v.as_array()).map(|x| x.iter().filter_map(|s| s.as_str().map(str::to_string)).collect::<Vec<_>>());
             match name {
@@ -336,9 +340,11 @@ fn call(root: &PathBuf, name: &str, a: &Value) -> Result<Value> {
                         hidden: a.get("hidden").and_then(|v| v.as_bool()), featured: a.get("featured").and_then(|v| v.as_bool()),
                         logo_prompt: sv(a, "logo_prompt").map(str::to_string), post: sv(a, "post").map(str::to_string),
                         enhanced: a.get("enhanced").and_then(|v| v.as_bool()), order: None,
+                        family: sv(a, "family").map(str::to_string),
                     };
                     cc::update(&site, req(a, "slug")?, &p)
                 }
+                "code_family" => cc::family(&site, &serde_json::from_value(a.clone())?).map(|v| json!({ "added": v["added"], "families": v["families"] })),
                 "code_category" => cc::category(&site, req(a, "id")?, sv(a, "title"), sv(a, "description"), a.get("remove").and_then(|v| v.as_bool()).unwrap_or(false)),
                 "code_apply_scheme" => cc::apply_scheme(&site, &serde_json::from_value(a.clone())?).map(|v| json!({ "applied": v["applied"], "categories": v["categories"] })),
                 "code_sync" => Ok(serde_json::to_value(cc::sync(&site, a.get("logos").and_then(|v| v.as_bool()).unwrap_or(true), false, &|l| eprintln!("{l}"))?)?),

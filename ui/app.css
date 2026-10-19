@@ -349,3 +349,4 @@ button.mic:hover, button.mic:focus-visible { opacity: 1; border-color: var(--lin
 .code-logo-strip { display: flex; flex-wrap: wrap; gap: .8rem; margin: .6rem 0; }
 .code-logo-strip a { display: flex; flex-direction: column; align-items: center; gap: .2rem; width: 84px; text-align: center; text-decoration: none; color: var(--ink); }
 .code-cat-row { display: flex; gap: .4rem; align-items: center; margin: 0 0 .4rem; }
+.code-family-row { display: flex; gap: .7rem; align-items: center; padding: .5rem 0; border-top: 1px solid var(--line); }

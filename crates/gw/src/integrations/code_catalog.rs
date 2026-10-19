@@ -203,13 +203,9 @@ pub fn state(site: &Site) -> Result<Value> {
             v["listed"] = json!(p.listed());
             v["url"] = json!(format!("{}{}/", codecat::URL, p.slug));
             v["repo_url"] = json!(p.repo_url());
-            let has = !p.logo.is_empty() && dir.join(&p.logo).is_file();
-            v["logo_url"] = json!(if has {
-                let t = std::fs::metadata(dir.join(&p.logo)).and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
-                format!("/api/code/logo/{}?v={t}", p.logo)
-            } else {
-                String::new()
-            });
+            let shown = c.logo_of(p);
+            v["logo_url"] = json!(shown.map(|(f, _)| logo_api_url(&dir, f)).unwrap_or_default());
+            v["logo_from_family"] = json!(shown.is_some_and(|(_, fam)| fam));
             v["related_back"] = json!(c.projects.iter().filter(|q| q.related.contains(&p.slug)).map(|q| q.slug.clone()).collect::<Vec<_>>());
             let post = if p.post.is_empty() {
                 items.iter().find(|it| it.repo.as_deref().is_some_and(|r| norm(r) == norm(&p.repo_url())))
@@ -221,16 +217,50 @@ pub fn state(site: &Site) -> Result<Value> {
         })
         .collect();
     let listed = c.projects.iter().filter(|p| p.listed()).count();
-    let need_logo = c.projects.iter().filter(|p| p.listed() && p.logo.is_empty()).count();
-    let open_prs = c.projects.iter().filter(|p| p.logo_source == "imported" && p.logo_pr.is_empty()).count();
+    let need_logo = codecat::logo_batches(&c, 1000).concat().len();
+    let open_prs = pr_candidates(&c).len();
+    let families: Vec<Value> = c
+        .families
+        .iter()
+        .map(|f| {
+            let mut v = serde_json::to_value(f).unwrap_or_default();
+            v["members"] = json!(c.projects.iter().filter(|p| p.family == f.id).map(|p| p.slug.clone()).collect::<Vec<_>>());
+            v["logo_url"] = json!(if f.logo.is_empty() { String::new() } else { logo_api_url(&dir, &f.logo) });
+            v["prompt"] = json!(codecat::family_prompt(&c, f));
+            v
+        })
+        .collect();
     Ok(json!({
         "file": Catalog::path(&site.root).display().to_string(), "exists": exists,
         "title": c.title, "intro": c.intro, "owner": c.owner, "logo_style": c.logo_style, "default_logo_style": codecat::DEFAULT_LOGO_STYLE,
-        "categories": c.categories, "projects": projects,
+        "categories": c.categories, "families": families, "projects": projects,
         "counts": { "all": c.projects.len(), "listed": listed, "need_logo": need_logo, "awaiting_pr": open_prs },
         "url": format!("{}{}", site.config.site.base_url.trim_end_matches('/'), codecat::URL),
         "job": job(),
     }))
+}
+
+fn logo_api_url(dir: &Path, file: &str) -> String {
+    if !dir.join(file).is_file() {
+        return String::new();
+    }
+    let t = std::fs::metadata(dir.join(file)).and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
+    format!("/api/code/logo/{file}?v={t}")
+}
+
+/// Projects whose logo was made here (imported, or their family's mark) and is not yet in their
+/// repository by pull request.
+fn pr_candidates(c: &Catalog) -> Vec<String> {
+    c.projects
+        .iter()
+        .filter(|p| p.listed() && p.logo_pr.is_empty())
+        .filter(|p| match c.logo_of(p) {
+            Some((_, true)) => true,
+            Some((_, false)) => p.logo_source == "imported",
+            None => false,
+        })
+        .map(|p| p.slug.clone())
+        .collect()
 }
 
 /// One project with everything the app's editor shows.
@@ -239,7 +269,11 @@ pub fn show(site: &Site, slug: &str) -> Result<Value> {
     let p = st["projects"].as_array().and_then(|a| a.iter().find(|p| p["slug"] == slug)).cloned().with_context(|| format!("no project {slug} in {}", codecat::FILE))?;
     let c = load(site)?;
     let mut v = p;
-    v["logo_prompt_effective"] = json!(codecat::logo_prompt(&c, c.get(slug).unwrap()));
+    let p = c.get(slug).unwrap();
+    v["logo_prompt_effective"] = json!(match c.family(&p.family) {
+        Some(f) if p.logo.is_empty() => codecat::family_prompt(&c, f),
+        _ => codecat::logo_prompt(&c, p),
+    });
     Ok(v)
 }
 
@@ -260,6 +294,8 @@ pub struct Patch {
     pub order: Option<Option<i64>>,
     pub logo_prompt: Option<String>,
     pub post: Option<String>,
+    /// A logo family's id ("" to leave it).
+    pub family: Option<String>,
     /// Set by an applied enhancement: stamps `enhanced`.
     pub enhanced: Option<bool>,
 }
@@ -303,6 +339,7 @@ pub fn update(site: &Site, slug: &str, p: &Patch) -> Result<Value> {
         if let Some(v) = p.order { it.order = v; }
         if let Some(v) = &p.logo_prompt { it.logo_prompt = v.trim().to_string(); }
         if let Some(v) = &p.post { it.post = v.trim().to_string(); }
+        if let Some(v) = &p.family { it.family = v.trim().to_string(); }
         if p.enhanced == Some(true) { it.enhanced = today(); }
         Ok(())
     })?;
@@ -337,6 +374,61 @@ pub fn settings(site: &Site, s: &Settings) -> Result<Value> {
         Ok(())
     })?;
     state(site)
+}
+
+/// Add or change a logo family (`remove` drops it and frees its members), and add members: the
+/// given slugs and every project in the given categories.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct FamilyChange {
+    pub id: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub concept: Option<String>,
+    pub logo_prompt: Option<String>,
+    pub add: Vec<String>,
+    pub categories: Vec<String>,
+    pub drop: Vec<String>,
+    pub remove: bool,
+}
+
+pub fn family(site: &Site, ch: &FamilyChange) -> Result<Value> {
+    let id = codecat::slug_for(&ch.id);
+    let added = modify(site, |c| {
+        if ch.remove {
+            c.families.retain(|f| f.id != id);
+            for p in c.projects.iter_mut().filter(|p| p.family == id) {
+                p.family.clear();
+            }
+            return Ok(0);
+        }
+        let f = match c.families.iter_mut().position(|f| f.id == id) {
+            Some(i) => &mut c.families[i],
+            None => {
+                c.families.push(codecat::Family { id: id.clone(), title: codecat::title_for(&id), ..Default::default() });
+                c.families.last_mut().unwrap()
+            }
+        };
+        if let Some(v) = &ch.title { f.title = v.trim().into(); }
+        if let Some(v) = &ch.description { f.description = v.trim().into(); }
+        if let Some(v) = &ch.concept { f.concept = v.trim().into(); }
+        if let Some(v) = &ch.logo_prompt { f.logo_prompt = v.trim().into(); }
+        let mut n = 0;
+        for s in &ch.add {
+            let p = c.get_mut(s.trim()).with_context(|| format!("no project {s}"))?;
+            if p.family != id { p.family = id.clone(); n += 1; }
+        }
+        for p in c.projects.iter_mut().filter(|p| ch.categories.contains(&p.category)) {
+            if p.family != id { p.family = id.clone(); n += 1; }
+        }
+        for s in &ch.drop {
+            if let Some(p) = c.get_mut(s.trim()).filter(|p| p.family == id) { p.family.clear(); }
+        }
+        Ok(n)
+    })?;
+    let mut v = state(site)?;
+    v["added"] = json!(added);
+    Ok(v)
 }
 
 /// Add or change one category (`remove` drops it).
@@ -705,6 +797,13 @@ pub fn logo_prompts(site: &Site, size: usize) -> Result<Value> {
 /// the full-size image kept for the repository PR.
 pub fn import_logo(site: &Site, slug: Option<&str>, name: &str, bytes: &[u8]) -> Result<Value> {
     let c = load(site)?;
+    let fam = match slug.filter(|s| !s.is_empty()) {
+        Some(s) => s.strip_prefix("family-").map(|id| c.family(id).with_context(|| format!("no family {id}"))).transpose()?,
+        None => codecat::match_family_file(&c, name),
+    };
+    if let Some(f) = fam {
+        return import_family_logo(site, &f.id.clone(), name, bytes);
+    }
     let p = match slug.filter(|s| !s.is_empty()) {
         Some(s) => c.get(s).with_context(|| format!("no project {s}"))?,
         None => codecat::match_logo_file(&c, name).with_context(|| format!("{name}: no project matches this file name (save it as <slug>.png)"))?,
@@ -728,6 +827,29 @@ pub fn import_logo(site: &Site, slug: Option<&str>, name: &str, bytes: &[u8]) ->
         Ok(())
     })?;
     Ok(json!({ "slug": slug, "file": format!("{slug}.{ext}"), "from": name }))
+}
+
+/// A family's mark: saved as `family-<id>.<ext>` and shown by every member without its own logo.
+fn import_family_logo(site: &Site, id: &str, name: &str, bytes: &[u8]) -> Result<Value> {
+    let stem = format!("family-{id}");
+    let (small, ext) = codecat::normalise_logo(bytes, SITE_PX)?;
+    let (big, _) = codecat::normalise_logo(bytes, REPO_PX)?;
+    for (dir, data) in [(logo_dir(site), small), (source_dir(site), big)] {
+        std::fs::create_dir_all(&dir)?;
+        remove_logo_files(&dir, &stem)?;
+        std::fs::write(dir.join(format!("{stem}.{ext}")), data)?;
+    }
+    let members = modify(site, |c| {
+        c.families.iter_mut().find(|f| f.id == id).context("family gone")?.logo = format!("{stem}.{ext}");
+        // A new mark: members' earlier pull requests carried the old one.
+        let mut n = 0;
+        for p in c.projects.iter_mut().filter(|p| p.family == id && p.logo.is_empty()) {
+            p.logo_pr.clear();
+            n += 1;
+        }
+        Ok(n)
+    })?;
+    Ok(json!({ "slug": stem, "family": id, "members": members, "file": format!("{stem}.{ext}"), "from": name }))
 }
 
 /// Import every image in the given files and folders (not recursive).
@@ -766,18 +888,16 @@ fn relative(from_dir: &str, to: &str) -> String {
 pub fn logo_pr(site: &Site, slug: &str, log: &dyn Fn(String)) -> Result<Value> {
     let c = load(site)?;
     let p = c.get(slug).with_context(|| format!("no project {slug}"))?.clone();
-    if p.logo.is_empty() {
-        bail!("{slug} has no logo yet");
-    }
-    if p.logo_source != "imported" {
+    let (file, from_family) = c.logo_of(&p).map(|(f, fam)| (f.to_string(), fam)).with_context(|| format!("{slug} has no logo yet"))?;
+    if !from_family && p.logo_source != "imported" {
         bail!("{slug}'s logo came from its repository ({}); there is nothing to add", p.github.logo_path);
     }
     if !p.logo_pr.is_empty() {
         bail!("{slug} already has a logo PR: {}", p.logo_pr);
     }
-    let ext = p.logo.rsplit_once('.').map(|(_, e)| e).unwrap_or("png");
-    let src = source_dir(site).join(&p.logo);
-    let bytes = std::fs::read(&src).or_else(|_| std::fs::read(logo_dir(site).join(&p.logo))).context("reading the logo")?;
+    let ext = file.rsplit_once('.').map(|(_, e)| e).unwrap_or("png");
+    let src = source_dir(site).join(&file);
+    let bytes = std::fs::read(&src).or_else(|_| std::fs::read(logo_dir(site).join(&file))).context("reading the logo")?;
     let repo = &p.repo;
     let meta = gh_json(&["api", &format!("repos/{repo}")])?;
     let base = meta["default_branch"].as_str().context("no default branch")?.to_string();
@@ -793,7 +913,8 @@ pub fn logo_pr(site: &Site, slug: &str, log: &dyn Fn(String)) -> Result<Value> {
     }
     log(format!("{repo}: branch {head} from {base}"));
     gh_send("POST", &format!("repos/{repo}/git/refs"), &json!({ "ref": format!("refs/heads/{head}"), "sha": sha }))?;
-    let logo_path = codecat::repo_logo_path(&p, ext);
+    // A family mark never replaces a logo the repository already has elsewhere.
+    let logo_path = if from_family { format!("assets/logo.{ext}") } else { codecat::repo_logo_path(&p, ext) };
     let existing = gh_get_opt(&format!("repos/{repo}/contents/{}?ref={}", enc_path(&logo_path), urlencoding::encode(&head)))?;
     let mut body = json!({ "message": format!("Add the project logo ({logo_path})"), "content": base64::engine::general_purpose::STANDARD.encode(&bytes), "branch": head });
     if let Some(sha) = existing.as_ref().and_then(|e| e["sha"].as_str()) {
@@ -843,7 +964,7 @@ pub fn logo_pr(site: &Site, slug: &str, log: &dyn Fn(String)) -> Result<Value> {
 
 /// Projects whose imported logo has no PR yet.
 pub fn awaiting_pr(site: &Site) -> Result<Vec<String>> {
-    Ok(load(site)?.projects.iter().filter(|p| p.logo_source == "imported" && p.logo_pr.is_empty() && !p.logo.is_empty()).map(|p| p.slug.clone()).collect())
+    Ok(pr_candidates(&load(site)?))
 }
 
 pub fn logo_prs(site: &Site, slugs: &[String], log: &dyn Fn(String)) -> Result<Value> {
@@ -1173,6 +1294,30 @@ pub enum CodeCmd {
         #[arg(long)]
         remove: bool,
     },
+    /// A logo family — projects sharing one mark: gw code family hitorro --title HiTorro
+    /// --concept "a stylised red bull" --category hitorro --category hitorro-mesh
+    Family {
+        id: String,
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long)]
+        description: Option<String>,
+        /// The mark's idea, for the prompt.
+        #[arg(long)]
+        concept: Option<String>,
+        /// Add these projects (comma separated slugs).
+        #[arg(long)]
+        add: Option<String>,
+        /// Add every project in this category (repeatable).
+        #[arg(long)]
+        category: Vec<String>,
+        /// Take these projects out (comma separated).
+        #[arg(long)]
+        drop: Option<String>,
+        /// Delete the family (its members keep their projects, lose the mark).
+        #[arg(long)]
+        remove: bool,
+    },
     /// Ask Claude for a better title, summary, description, tags, category, related projects and
     /// logo prompt for a project, from its README. Shows the proposal; --apply saves it.
     Enhance {
@@ -1241,6 +1386,11 @@ pub fn run_cli(site: &Site, c: CodeCmd) -> Result<Value> {
             })
         }
         CodeCmd::Category { id, title, description, remove } => category(site, &id, title.as_deref(), description.as_deref(), remove),
+        CodeCmd::Family { id, title, description, concept, add, category, drop, remove } => {
+            let split = |s: Option<String>| s.map(|s| s.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect::<Vec<_>>()).unwrap_or_default();
+            let v = family(site, &FamilyChange { id, title, description, concept, logo_prompt: None, add: split(add), categories: category, drop: split(drop), remove })?;
+            Ok(json!({ "added": v["added"], "families": v["families"].as_array().map(|a| a.iter().map(|f| json!({ "id": f["id"], "title": f["title"], "members": f["members"].as_array().map(|m| m.len()), "logo": f["logo"], "prompt": f["prompt"] })).collect::<Vec<_>>()) }))
+        }
         CodeCmd::Enhance { slug, apply } => {
             let v = enhance(site, &slug, &print)?;
             if !apply {
@@ -1367,6 +1517,29 @@ mod tests {
         assert_eq!(r["applied"]["categories_set"], 1);
         category(&site, "tools", None, None, true).unwrap();
         assert_eq!(load(&site).unwrap().get("b").unwrap().category, "", "removing a category clears it from projects");
+    }
+
+    #[test]
+    fn families_get_one_mark() {
+        let site = site_with("categories:\n  - { id: fw, title: Framework }\nprojects:\n  - { slug: fw-core, repo: me/fw-core, category: fw }\n  - { slug: fw-ui, repo: me/fw-ui, category: fw }\n  - { slug: other, repo: me/other }\n");
+        let v = family(&site, &FamilyChange { id: "FW".into(), title: Some("The Framework".into()), concept: Some("a stylised red bull".into()), categories: vec!["fw".into()], ..Default::default() }).unwrap();
+        assert_eq!(v["added"], 2);
+        let p = logo_prompts(&site, 10).unwrap();
+        assert_eq!(p["count"], 2, "the family mark and the other project");
+        assert_eq!(p["batches"][0]["items"][0]["file"], "family-fw.png");
+        assert!(p["batches"][0]["items"][0]["prompt"].as_str().unwrap().contains("a stylised red bull"));
+        let img = image::RgbaImage::from_pixel(600, 600, image::Rgba([200, 0, 0, 255]));
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(img).write_to(&mut png, image::ImageFormat::Png).unwrap();
+        let r = import_logo(&site, None, "Family_FW (1).png", png.get_ref()).unwrap();
+        assert_eq!((r["family"].as_str(), r["members"].as_u64()), (Some("fw"), Some(2)));
+        let st = state(&site).unwrap();
+        let core = st["projects"].as_array().unwrap().iter().find(|p| p["slug"] == "fw-core").unwrap();
+        assert!(core["logo_url"].as_str().unwrap().contains("family-fw.png") && core["logo_from_family"] == true);
+        assert_eq!(awaiting_pr(&site).unwrap(), ["fw-core", "fw-ui"]);
+        assert_eq!(logo_prompts(&site, 10).unwrap()["count"], 1);
+        family(&site, &FamilyChange { id: "fw".into(), remove: true, ..Default::default() }).unwrap();
+        assert!(load(&site).unwrap().projects.iter().all(|p| p.family.is_empty()));
     }
 
     #[test]

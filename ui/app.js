@@ -2661,6 +2661,7 @@ async function viewCodeProject(slug) {
           <label>Category <select name="category"><option value="">— none —</option>${c.categories.map(x => `<option value="${esc(x.id)}" ${x.id === p.category ? 'selected' : ''}>${esc(x.title)}</option>`).join('')}</select></label>
           <label>Tags (comma separated) <input name="tags" value="${esc((p.tags || []).join(', '))}" list="code-tags"></label>
         </div>
+        <label>Logo family — share one mark with related projects <select name="family"><option value="">— none —</option>${(c.families || []).map(x => `<option value="${esc(x.id)}" ${x.id === p.family ? 'selected' : ''}>${esc(x.title)} (${x.members.length})</option>`).join('')}</select></label>
         <datalist id="code-tags">${[...new Set(c.projects.flatMap(x => x.tags || []))].sort().map(t => `<option value="${esc(t)}">`).join('')}</datalist>
         <label>Related projects (shown on both pages)
           <div class="code-related-edit" data-related></div>
@@ -2676,9 +2677,10 @@ async function viewCodeProject(slug) {
       </div>
       <div class="code-side">
         <div class="code-logo-box" data-drop tabindex="0">${codeLogo(p, 160)}
-          <p class="muted small">${p.logo ? `Logo from ${esc({ readme: 'the README', repo: 'the repository', imported: 'an imported image' }[p.logo_source] || 'the site')}${gh.logo_path ? ` <span class="mono">${esc(gh.logo_path)}</span>` : ''}` : 'No logo yet.'}</p>
+          <p class="muted small">${p.logo ? `Logo from ${esc({ readme: 'the README', repo: 'the repository', imported: 'an imported image' }[p.logo_source] || 'the site')}${gh.logo_path ? ` <span class="mono">${esc(gh.logo_path)}</span>` : ''}`
+            : p.family ? `Uses the <a href="#code/categories">${esc(((c.families || []).find(x => x.id === p.family) || {}).title || p.family)}</a> family mark${p.logo_from_family ? '' : ' (not rendered yet)'}. Drop an image to give it its own.` : 'No logo yet.'}</p>
           <p class="small">Drop an image here, or <button data-upload>Choose…</button><input type="file" accept="image/*" data-file hidden></p>
-          ${p.logo_source === 'imported' ? (p.logo_pr ? `<p class="small">In the repository: <a href="${esc(p.logo_pr)}" target="_blank">pull request ↗</a></p>` : '<p class="small"><button data-pr>Add to the repository (PR)…</button></p>') : ''}
+          ${p.logo_source === 'imported' || p.logo_from_family ? (p.logo_pr ? `<p class="small">In the repository: <a href="${esc(p.logo_pr)}" target="_blank">pull request ↗</a></p>` : '<p class="small"><button data-pr>Add to the repository (PR)…</button></p>') : ''}
         </div>
         <label>Logo prompt for ChatGPT <span class="muted small">(edit to write your own; empty = composed from the summary)</span>
           <textarea name="logo_prompt" rows="9" placeholder="${esc(p.logo_prompt_effective)}">${esc(p.logo_prompt)}</textarea></label>
@@ -2705,7 +2707,7 @@ async function viewCodeProject(slug) {
   const values = () => ({
     title: f('title').value, summary: sum.value, description: f('description').value, category: f('category').value,
     tags: csv(f('tags').value), related, hidden: !f('shown').checked, featured: f('featured').checked,
-    post: f('post').value, logo_prompt: f('logo_prompt').value,
+    post: f('post').value, logo_prompt: f('logo_prompt').value, family: f('family').value,
   });
   const save = async (extra = {}) => guard(async () => {
     await api('PUT', '/code/projects/' + encodeURIComponent(slug), { ...values(), ...extra });
@@ -2779,7 +2781,7 @@ async function confirmLogoPrs(slugs, c, after) {
 async function viewCodeLogos() {
   const size = parseInt(sessionStorage.getItem('gw-code-batch') || '10', 10);
   const [pr, c] = await Promise.all([get('/code/logo-prompts?size=' + size), get('/code')]);
-  const waiting = c.projects.filter(p => p.logo_source === 'imported' && !p.logo_pr && p.logo);
+  const waiting = c.projects.filter(p => p.listed && !p.logo_pr && ((p.logo_source === 'imported' && p.logo) || p.logo_from_family));
   main.innerHTML = `
     <p class="muted small"><a href="#code">Code</a> › Logos</p>
     <h1>Logos</h1>
@@ -2797,7 +2799,7 @@ async function viewCodeLogos() {
       <span class="grow"></span><span class="muted small">House style (end of every prompt): <a href="#code/categories">change</a></span></div>
     ${pr.batches.map(b => `<div class="panel code-batch"><div class="bar" style="margin:0 0 .5rem"><strong>Batch ${b.number} of ${pr.batches.length}</strong> <span class="muted small">${b.items.length} logos</span><span class="grow"></span>
         <button class="primary" data-copy-batch="${b.number - 1}">Copy batch ${b.number}</button></div>
-      <ol class="code-prompts">${b.items.map(i => `<li><a href="#code/${encodeURIComponent(i.slug)}"><strong>${esc(i.title)}</strong></a> <span class="mono small">${esc(i.file)}</span>
+      <ol class="code-prompts">${b.items.map(i => `<li><a href="${i.slug.startsWith('family-') ? '#code/categories' : '#code/' + encodeURIComponent(i.slug)}"><strong>${esc(i.title)}</strong></a> <span class="mono small">${esc(i.file)}</span>
         <button class="small" data-copy-one="${esc(i.slug)}">Copy</button><div class="muted small">${esc(i.prompt)}</div></li>`).join('')}</ol></div>`).join('')
       || '<p class="empty">Every project on the website has a logo.</p>'}`;
   $('[data-size]').onchange = e => { sessionStorage.setItem('gw-code-batch', e.target.value); viewCodeLogos(); };
@@ -2857,6 +2859,12 @@ async function viewCodeCategories() {
     <h2>Categories</h2>
     <div data-cats></div>
     <div class="bar"><button data-add>Add category</button><span class="grow"></span><button class="primary" data-save>Save categories</button></div>
+    <h2>Logo families</h2>
+    <p class="muted small">Projects that share one mark — the modules of a framework, say. The family gets one prompt (file <span class="mono">family-&lt;id&gt;.png</span>); its members show the mark unless they have a logo of their own.</p>
+    <div data-families>${(c.families || []).map(x => `<div class="code-family-row">${x.logo_url ? `<img class="code-logo" src="${esc(x.logo_url)}" alt="" width="44" height="44">` : `<span class="code-logo code-mono" style="--h:${hueOf(x.id)}">${esc(monoOf(x.title))}</span>`}
+      <div style="flex:1"><strong>${esc(x.title)}</strong> <span class="mono small">${esc(x.id)}</span> · ${x.members.length} projects<div class="muted small">${esc(x.concept || '')}</div></div>
+      <button data-fam-copy="${esc(x.id)}">Copy prompt</button><button data-fam-edit="${esc(x.id)}">Edit…</button></div>`).join('') || '<p class="empty">No families.</p>'}</div>
+    <div class="bar"><button data-fam-add>Add family…</button></div>
     <h2>The catalog page</h2>
     <label>Title <input data-title value="${esc(c.title)}" placeholder="Code"></label>
     <label>Introduction <textarea data-intro rows="3">${esc(c.intro)}</textarea></label>
@@ -2886,6 +2894,29 @@ async function viewCodeCategories() {
     await api('PUT', '/code', { title: $('[data-title]').value, intro: $('[data-intro]').value, owner: $('[data-owner]').value, logo_style: $('[data-style]').value });
     toast('Saved');
   });
+  const famForm = async x => {
+    const isNew = !x;
+    x = x || { id: '', title: '', description: '', concept: '', logo_prompt: '', members: [] };
+    const v = await form(isNew ? 'New logo family' : 'Family: ' + x.title, [
+      ...(isNew ? [{ name: 'id', label: 'Id (short, kebab-case)', required: true }] : []),
+      { name: 'title', label: 'Name', value: x.title, required: true },
+      { name: 'description', label: 'What the family is (for the prompt)', type: 'textarea', rows: 2, value: x.description },
+      { name: 'concept', label: 'The mark — e.g. a stylised red bull', type: 'textarea', rows: 2, value: x.concept },
+      { name: 'categories', label: 'Add every project in these categories', type: 'select', multiple: true, options: c.categories.map(k => [k.id, `${k.title} (${counts[k.id] || 0})`]), value: [] },
+      { name: 'add', label: 'Add projects (comma separated slugs)', value: '' },
+      { name: 'logo_prompt', label: 'Your own prompt instead (optional)', type: 'textarea', rows: 3, value: x.logo_prompt },
+      ...(isNew ? [] : [{ name: 'remove', label: `Delete this family (its ${x.members.length} projects lose the mark)`, type: 'checkbox', value: false }]),
+    ]);
+    if (!v) return;
+    guard(async () => {
+      const r = await api('POST', '/code/family', { id: isNew ? v.id : x.id, title: v.title, description: v.description, concept: v.concept, logo_prompt: v.logo_prompt, categories: v.categories, add: csv(v.add), remove: !!v.remove });
+      toast(v.remove ? 'Family deleted' : `Saved${r.added ? ` — ${r.added} projects added` : ''}`);
+      viewCodeCategories();
+    });
+  };
+  $('[data-fam-add]').onclick = () => famForm(null);
+  $$('[data-fam-edit]').forEach(b => b.onclick = () => famForm(c.families.find(x => x.id === b.dataset.famEdit)));
+  $$('[data-fam-copy]').forEach(b => b.onclick = () => copyQuiet(`${c.families.find(x => x.id === b.dataset.famCopy).prompt}\n\n(File name: family-${b.dataset.famCopy}.png)`, 'Family prompt copied'));
   const log = $('[data-joblog]');
   $('[data-suggest]').onclick = () => startCodeJob('/code/suggest', {}, log, j => { log.hidden = true; if (j.result) showScheme(j.result); });
   const titleOf = s => (c.projects.find(x => x.slug === s) || {}).display_title || s;

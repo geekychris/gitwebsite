@@ -36,6 +36,9 @@ replaces). By hand: `gw code category <id> --title … --description …`, `gw c
    naming the file to save as (`<slug>.png`). Give the user one batch at a time to paste into
    ChatGPT. A better summary (improve the text first) gives a better prompt; a project's own
    `logo_prompt` overrides the composed one.
+   Projects that should share one mark (a framework's modules) form a **logo family**:
+   `gw code family <id> --title … --concept "…" --category <cat>` [`code_family`] — the family is
+   one prompt item (`family-<id>.png`) and its members show the mark.
 2. The user saves the images; `gw code import-logos <folder or files>` matches them by file name
    (or they drop them on the app's Logos page).
 3. Adding logos to the repositories opens pull requests on the user's GitHub — **ask first**, list

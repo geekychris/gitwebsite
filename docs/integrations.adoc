@@ -362,14 +362,21 @@ An improved project gets Claude's logo idea in its prompt; you can write your ow
    `assets/logo.png` and centres it at the top of the README, on a branch `gitwebsite/add-logo`,
    and opens a pull request for you to merge. `gw code logo-pr --all --yes`.
 
+*Logo families*: projects that should share one mark — the modules of a framework — form a
+family (*Categories & tags → Logo families*, or `gw code family hitorro --title HiTorro --concept
+"a stylised red bull" --category hitorro`). The family is one item in the prompts
+(`family-<id>.png`); once imported, every member without a logo of its own shows it on the
+website, and the pull requests add it to each member's repository. In `code.yaml`:
+`families: [{ id, title, description, concept, logo_prompt, logo }]` and `family: <id>` on a project.
+
 Sync, Claude and pull requests run in the background in `gw serve`, one at a time; the page shows
 their progress. REST: `GET /api/code`, `PUT /api/code` (settings, categories),
 `GET|PUT /api/code/projects/<slug>`, `POST /api/code/sync`, `POST /api/code/projects/<slug>/enhance`,
-`POST /api/code/suggest`, `POST /api/code/scheme`, `GET /api/code/job`,
+`POST /api/code/suggest`, `POST /api/code/scheme`, `POST /api/code/family`, `GET /api/code/job`,
 `GET /api/code/logo-prompts?size=10`, `POST /api/code/logos/upload?name=…[&slug=…]` (the image as
 the body), `POST /api/code/logos/import {paths}`, `POST /api/code/logo-prs {slugs | all, confirm: true}`,
 `GET /api/code/logo/<file>`. MCP: `code_list`, `code_get` (with the README, for writing),
-`code_update`, `code_category`, `code_apply_scheme`, `code_sync`, `code_logo_prompts`, `code_logo_pr`.
+`code_update`, `code_category`, `code_family`, `code_apply_scheme`, `code_sync`, `code_logo_prompts`, `code_logo_pr`.
 
 The pages use the templates `code.html` and `code_project.html` and `static/css/code.css` and
 `static/js/code.js`. Add `{ label: Code, href: /code/ }` to `nav:` in site.yaml to put it in the menu.
