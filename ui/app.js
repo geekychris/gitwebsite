@@ -2574,7 +2574,7 @@ async function viewCode(rest = []) {
   // `_` and `-` read as spaces, so "amiga" finds amiga_mcp.
   const words = q.toLowerCase().replace(/[_-]/g, ' ').split(/\s+/).filter(Boolean);
   const hay = p => `${p.slug} ${p.repo} ${p.display_title} ${p.display_summary} ${p.description || ''} ${(p.tags || []).join(' ')} ${(p.github || {}).language || ''} ${((p.github || {}).topics || []).join(' ')} ${catTitle(p.category)}`.toLowerCase().replace(/[_-]/g, ' ');
-  const inShow = p => show === 'all' || (show === 'listed' && p.listed) || (show === 'hidden' && !p.listed) || (show === 'nologo' && p.listed && !p.logo);
+  const inShow = p => show === 'all' || (show === 'listed' && p.listed) || (show === 'hidden' && !p.listed && !p.review) || (show === 'nologo' && p.listed && !p.logo);
   const inCat = p => cat === 'all' || (p.category || '') === (cat === 'none' ? '' : cat);
   const found = c.projects.filter(p => words.every(w => hay(p).includes(w)));
   const shown = found.filter(p => inCat(p) && inShow(p)).sort((a, b) => a.display_title.localeCompare(b.display_title));
@@ -2590,13 +2590,15 @@ async function viewCode(rest = []) {
     <p class="sub">Your git projects, shown on the website at <a href="/preview/code/" target="_blank">/code/</a> — ${c.counts.listed} of ${c.counts.all} on it.
       Kept in <span class="mono">${esc(c.file)}</span>; <em>Sync</em> brings in new repositories from GitHub${c.owner ? ` (${esc(c.owner)})` : ''} and their logos.</p>
     <div class="cards meshy-stats">
-      <div class="stat"><b>${c.counts.listed}</b>on the website</div>
+      <div class="stat"><b>${c.counts.listed}</b>on the website${c.counts.review ? ` · ${c.counts.review} to review` : ''}</div>
       <div class="stat"><b>${c.counts.need_logo}</b>without a logo · <a href="#code/logos">logo prompts</a></div>
       <div class="stat"><b>${c.counts.awaiting_pr}</b>new logos not yet in their repository</div>
       <div class="stat"><b>${c.categories.length}</b>categories · <a href="#code/categories">organise</a></div>
     </div>
+    ${reviewPanel(c)}
     <div class="bar">
-      <button class="primary" data-sync ${job.running ? 'disabled' : ''}>${job.running && job.kind === 'sync' ? 'Syncing…' : 'Sync from GitHub'}</button>
+      <button class="primary" data-new ${job.running ? 'disabled' : ''} title="Sync from GitHub; Claude writes each new project's entry and the logo prompts. New projects wait for your review.">${job.running && job.kind === 'new' ? 'Checking…' : 'Check for new projects'}</button>
+      <button data-sync ${job.running ? 'disabled' : ''} title="Refresh every project's facts from GitHub">${job.running && job.kind === 'sync' ? 'Syncing…' : 'Sync from GitHub'}</button>
       <a class="btn" href="#code/categories">Categories &amp; tags…</a>
       <a class="btn" href="#code/logos">Logos…</a>
       <span class="grow"></span>
@@ -2637,7 +2639,51 @@ async function viewCode(rest = []) {
     if (j.result) toast(`Sync: ${j.result.added.length} new, ${j.result.added_hidden.length} hidden, ${j.result.logos_found.length} logos found`);
     viewCode();
   });
+  $('[data-new]').onclick = () => startCodeJob('/code/new', {}, box, j => {
+    const r = j.result;
+    if (r) toast(r.review.length ? `${r.review.length} new project${r.review.length === 1 ? '' : 's'} to review${r.need_logo.length ? `, ${r.need_logo.length} need a logo` : ''}` : 'No new projects');
+    viewCode();
+  });
+  const review = c.projects.filter(p => p.review && !p.hidden);
+  const approve = async slugs => {
+    const rows = slugs.map(s => c.projects.find(x => x.slug === s));
+    const withLogo = rows.filter(p => p.logo_url && !p.logo_from_family && !p.logo_pr && p.logo_source === 'imported');
+    const ok = await form(`Put ${rows.length === 1 ? esc(rows[0].display_title) : rows.length + ' projects'} on the website?`, [
+      { type: 'note', text: `They show on /code/ at the next build.${withLogo.length ? ` The logo${withLogo.length === 1 ? '' : 's'} of ${withLogo.map(p => p.repo).join(', ')} ${withLogo.length === 1 ? 'is' : 'are'} also added to the README (a pull request, merged).` : ''}` },
+    ], 'Approve');
+    if (!ok) return;
+    startCodeJob('/code/approve', { slugs, confirm: true }, box, j => {
+      if (j.result) toast(`${j.result.approved.length} on the website${j.result.logo_prs ? `, ${j.result.logo_prs.opened.length} logo${j.result.logo_prs.opened.length === 1 ? '' : 's'} added to READMEs` : ''}`);
+      viewCode();
+    });
+  };
+  $$('[data-approve]').forEach(b => b.onclick = e => { e.stopPropagation(); approve([b.dataset.approve]); });
+  const all = $('[data-approve-all]');
+  if (all) all.onclick = () => approve(review.map(p => p.slug));
+  $$('[data-dismiss]').forEach(b => b.onclick = e => {
+    e.stopPropagation();
+    guard(async () => { await api('POST', '/code/dismiss', { slugs: [b.dataset.dismiss] }); toast('Hidden from the website'); viewCode(); });
+  });
   if (job.running) followCodeJob(box, () => viewCode());
+}
+
+// New projects from GitHub, waiting for review (off the website until approved).
+function reviewPanel(c) {
+  const rows = c.projects.filter(p => p.review && !p.hidden);
+  if (!rows.length) return '';
+  const noLogo = rows.filter(p => !p.logo_url).length;
+  const cat = id => (c.categories.find(x => x.id === id) || {}).title || '';
+  return `<section class="code-review">
+    <h2>New projects to review <span class="muted">${rows.length}</span></h2>
+    <p class="muted small">Not on the website yet. Claude has written each entry — open one to edit it, then approve it.${noLogo
+      ? ` ${noLogo} still need${noLogo === 1 ? 's' : ''} a logo: paste the newest prompt file into ChatGPT, save the images in the pickup folder and <a href="#code/logos">import them</a> (see Logos).` : ''}</p>
+    <table class="code-table"><tbody>${rows.map(p => `<tr class="clickable" data-slug="${esc(p.slug)}">
+      <td style="width:52px">${codeLogo(p)}</td>
+      <td><strong>${esc(p.display_title)}</strong>${p.enhanced ? ' <span class="pill enh" title="Written by Claude">✦</span>' : ''}${p.logo_url ? '' : ' <span class="pill need">needs a logo</span>'}
+        <div class="muted small">${esc(p.display_summary || '—')}</div><div class="muted small mono">${esc(p.repo)}${p.github.language ? ' · ' + esc(p.github.language) : ''}${p.category ? ' · ' + esc(cat(p.category)) : ''}</div></td>
+      <td style="white-space:nowrap;text-align:right"><button class="primary" data-approve="${esc(p.slug)}">Approve</button> <button data-dismiss="${esc(p.slug)}" title="Keep it off the website">Hide</button></td></tr>`).join('')}</tbody></table>
+    ${rows.length > 1 ? '<div class="bar"><button data-approve-all>Approve all</button></div>' : ''}
+  </section>`;
 }
 
 async function viewCodeProject(slug) {
@@ -2775,11 +2821,11 @@ async function viewCodeProject(slug) {
 async function confirmLogoPrs(slugs, c, after) {
   const rows = slugs.map(s => c.projects.find(x => x.slug === s)).filter(Boolean);
   const ok = await form(`Open ${rows.length} pull request${rows.length === 1 ? '' : 's'}?`, [
-    { type: 'note', text: `For each repository: a branch gitwebsite/add-logo with the logo as assets/logo.png (512 px) and the logo at the top of the README, and a pull request for you to merge. Repositories: ${rows.map(r => r.repo).join(', ')}.` },
+    { type: 'note', text: `For each repository: a branch gitwebsite/add-logo with the logo as assets/logo.png (512 px) and the logo at the top of the README, as a pull request that is merged straight away. Repositories: ${rows.map(r => r.repo).join(', ')}.` },
   ], 'Open pull requests');
   if (!ok) return;
   const log = $('[data-joblog]');
-  startCodeJob('/code/logo-prs', { slugs, confirm: true }, log, j => {
+  startCodeJob('/code/logo-prs', { slugs, merge: true, confirm: true }, log, j => {
     if (j.result) toast(`${j.result.opened.length} pull request${j.result.opened.length === 1 ? '' : 's'} opened${j.result.failed.length ? `, ${j.result.failed.length} failed` : ''}`, !!j.result.failed.length);
     after && after();
   });

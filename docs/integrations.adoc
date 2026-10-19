@@ -345,6 +345,24 @@ Claude* sends every project's name, summary, language and topics and gets back 6
 are added, unless you tick *Replace*. CLI: `gw code suggest [--apply] [--overwrite]`,
 `gw code category <id> --title … [--remove]`.
 
+=== New projects
+
+Once the catalog exists, a new repository is not put on the website straight away: it waits for
+review (`review: true` in code.yaml). *Code → Check for new projects* (`gw code new`) runs the whole
+capture as one job:
+
+. syncs from GitHub — new public repositories come in waiting for review;
+. looks for a logo in each new repository;
+. has Claude write each new project's entry — title, summary, description, category, tags,
+  related projects and a logo idea (the same as *✦ Improve with Claude*, applied for you);
+. writes ChatGPT prompt files into the pickup folder for the logos still missing (see below).
+
+The new projects appear at the top of the Code page under *New projects to review*. Open one to
+edit it; *Hide* keeps it off the website (`gw code dismiss <slug>`); *Approve* puts it on the
+website and, if it has a logo you imported, adds the logo to its README as a pull request that is
+merged straight away (`gw code approve <slug>… | --all --yes`; `--no-logo-pr`, `--no-merge`).
+A logo imported after approval goes to the README from the Logos page as usual.
+
 === Logos from ChatGPT
 
 Projects without a logo each get an image prompt: what the project is (its summary), its language
@@ -382,7 +400,8 @@ their progress. REST: `GET /api/code`, `PUT /api/code` (settings, categories),
 `GET|PUT /api/code/projects/<slug>`, `POST /api/code/sync`, `POST /api/code/projects/<slug>/enhance`,
 `POST /api/code/suggest`, `POST /api/code/scheme`, `POST /api/code/family`, `GET /api/code/job`,
 `GET /api/code/logo-prompts?size=15`, `POST /api/code/logo-prompts/write {size}`, `POST /api/code/logos/upload?name=…[&slug=…]` (the image as
-the body), `POST /api/code/logos/import {paths?, batch?}`, `POST /api/code/logo-prs {slugs | all, merge?, confirm: true}`,
+the body), `POST /api/code/logos/import {paths?, batch?}`, `POST /api/code/new`,
+`POST /api/code/approve {slugs | all, logo_prs? (true), merge? (true), confirm}`, `POST /api/code/dismiss {slugs}`, `POST /api/code/logo-prs {slugs | all, merge?, confirm: true}`,
 `GET /api/code/logo/<file>`. MCP: `code_list`, `code_get` (with the README, for writing),
 `code_update`, `code_category`, `code_family`, `code_apply_scheme`, `code_sync`, `code_logo_prompts`, `code_import_logos`, `code_logo_pr`.
 

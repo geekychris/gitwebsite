@@ -159,6 +159,9 @@ pub struct Project {
     /// When it was added to the catalog (YYYY-MM-DD).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub added: String,
+    /// New from GitHub and waiting for review: kept off the website until approved.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub review: bool,
     #[serde(default)]
     pub github: GitHub,
 }
@@ -276,8 +279,12 @@ impl Project {
     pub fn repo_url(&self) -> String {
         format!("https://github.com/{}", self.repo)
     }
-    /// On the website: not hidden, and still on GitHub and public.
+    /// On the website: not hidden, not waiting for review, and still on GitHub and public.
     pub fn listed(&self) -> bool {
+        self.wanted() && !self.review
+    }
+    /// On the website, or going to be once reviewed.
+    pub fn wanted(&self) -> bool {
         !self.hidden && !self.github.gone && !self.github.private
     }
 }
@@ -532,19 +539,21 @@ pub fn family_file(id: &str) -> String {
     format!("family-{id}.png")
 }
 
-/// The logos still needed — each family without a mark (if it has listed members), then the
-/// listed projects with no logo and no family mark — in display order, split into batches.
+/// The logos still needed — each family without a mark (if it has members), then the projects
+/// waiting for review and the listed ones with no logo and no family mark — split into batches.
 pub fn logo_batches(cat: &Catalog, size: usize) -> Vec<Vec<PromptItem>> {
     let size = size.max(1);
     let mut items: Vec<PromptItem> = cat
         .families
         .iter()
-        .filter(|f| f.logo.is_empty() && cat.projects.iter().any(|p| p.family == f.id && p.listed()))
+        .filter(|f| f.logo.is_empty() && cat.projects.iter().any(|p| p.family == f.id && p.wanted()))
         .map(|f| PromptItem { slug: format!("family-{}", f.id), title: format!("{} (family mark)", f.title), repo: String::new(), file: family_file(&f.id), prompt: family_prompt(cat, f) })
         .collect();
+    // Projects waiting for review first: they are what a new prompt file is usually for.
+    let review = cat.projects.iter().filter(|p| p.review && p.wanted());
     items.extend(
-        cat.ordered()
-            .into_iter()
+        review
+            .chain(cat.ordered())
             .filter(|p| p.logo.is_empty() && (p.family.is_empty() || cat.family(&p.family).is_none()))
             .map(|p| PromptItem { slug: p.slug.clone(), title: p.display_title(), repo: p.repo.clone(), file: format!("{}.png", p.slug), prompt: logo_prompt(cat, p) }),
     );
@@ -967,6 +976,16 @@ pub fn pages(c: &Catalog, static_dir: &Path, posts: &[PostRef], base_url: &str, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn projects_in_review_are_off_the_site_but_get_logo_prompts() {
+        let c = Catalog::parse("projects:\n  - { slug: old, repo: me/old, logo: old.png }\n  - { slug: fresh, repo: me/fresh, review: true }\n  - { slug: gone, repo: me/gone, review: true, hidden: true }\n").unwrap();
+        let fresh = c.get("fresh").unwrap();
+        assert!(!fresh.listed() && fresh.wanted());
+        assert_eq!(c.ordered().iter().map(|p| p.slug.as_str()).collect::<Vec<_>>(), ["old"]);
+        let items: Vec<String> = logo_batches(&c, 15).concat().into_iter().map(|i| i.slug).collect();
+        assert_eq!(items, ["fresh"]);
+    }
 
     #[test]
     fn search_text_reads_separators_as_spaces() {
