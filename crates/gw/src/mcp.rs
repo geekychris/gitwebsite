@@ -256,6 +256,12 @@ fn tools() -> Value {
             "write": {"type": "boolean", "description": "Also write every batch into the pickup folder's prompts/ (batch-NN.txt to paste, batch-NN.json with the order)"}}), &[])},
         {"name": "code_import_logos", "description": "Import rendered logos — by default everything in the pickup folder (images and zips): images named as the prompts asked (<slug>.png, family-<id>.png) match by name; with batch=N, images whose names match nothing are matched to that batch's missing logos in the order they were saved (only if the counts agree). Look at the images (they are moved to imported/) to check order matches before telling the user.",
          "inputSchema": s(json!({"paths": arr("Files or folders (default: the pickup folder)"), "batch": {"type": "integer", "description": "Batch number, to match unnamed images by order"}}), &[])},
+        {"name": "code_new_projects", "description": "Capture new projects for the code catalog: sync from GitHub, have Claude write each new project's entry (title, summary, description, category, tags, related, logo prompt), and write ChatGPT logo prompt files into the pickup folder. New projects wait for review (off the website) until code_approve. Takes a few minutes.",
+         "inputSchema": s(json!({}), &[])},
+        {"name": "code_approve", "description": "Put code-catalog projects waiting for review on the website; with logo_prs (default true) also add each one's imported logo to its repository's README as a pull request, merged unless merge=false. Adding logos WRITES TO THE USER'S REPOSITORIES: get explicit confirmation, then pass confirm=true.",
+         "inputSchema": s(json!({"slugs": arr("Project slugs"), "all": {"type": "boolean", "description": "Every project waiting for review"}, "logo_prs": {"type": "boolean"}, "merge": {"type": "boolean"}, "confirm": {"type": "boolean"}}), &[])},
+        {"name": "code_dismiss", "description": "Keep code-catalog projects waiting for review off the website (hidden).",
+         "inputSchema": s(json!({"slugs": arr("Project slugs")}), &["slugs"])},
         {"name": "code_logo_pr", "description": "Open a pull request on a project's GitHub repository adding its imported logo (assets/logo.png) at the top of its README, and with merge=true merge it. This WRITES TO THE USER'S REPOSITORIES: list what you will do and get explicit confirmation, then pass confirm=true.",
          "inputSchema": s(json!({"slugs": arr("Project slugs"), "all": {"type": "boolean", "description": "Every imported logo without a PR"}, "merge": {"type": "boolean", "description": "Also squash-merge each PR and delete its branch"}, "confirm": {"type": "boolean"}}), &["confirm"])},
     ])
@@ -324,7 +330,7 @@ fn call(root: &PathBuf, name: &str, a: &Value) -> Result<Value> {
             })
         }
         "post_models" => crate::integrations::site_models::post_models(&site, req(a, "id")?),
-        "code_list" | "code_get" | "code_update" | "code_category" | "code_family" | "code_apply_scheme" | "code_sync" | "code_logo_prompts" | "code_import_logos" | "code_logo_pr" => {
+        "code_list" | "code_get" | "code_update" | "code_category" | "code_family" | "code_apply_scheme" | "code_sync" | "code_logo_prompts" | "code_import_logos" | "code_logo_pr" | "code_new_projects" | "code_approve" | "code_dismiss" => {
             use crate::integrations::code_catalog as cc;
             let strs = |k: &str| a.get(k).and_then(|v| v.as_array()).map(|x| x.iter().filter_map(|s| s.as_str().map(str::to_string)).collect::<Vec<_>>());
             match name {
@@ -350,6 +356,16 @@ fn call(root: &PathBuf, name: &str, a: &Value) -> Result<Value> {
                 "code_family" => cc::family(&site, &serde_json::from_value(a.clone())?).map(|v| json!({ "added": v["added"], "families": v["families"] })),
                 "code_category" => cc::category(&site, req(a, "id")?, sv(a, "title"), sv(a, "description"), a.get("remove").and_then(|v| v.as_bool()).unwrap_or(false)),
                 "code_apply_scheme" => cc::apply_scheme(&site, &serde_json::from_value(a.clone())?).map(|v| json!({ "applied": v["applied"], "categories": v["categories"] })),
+                "code_new_projects" => cc::new_projects(&site, &|l| eprintln!("{l}")),
+                "code_approve" => {
+                    let prs = a.get("logo_prs").and_then(|v| v.as_bool()).unwrap_or(true);
+                    if prs && a.get("confirm").and_then(|v| v.as_bool()) != Some(true) {
+                        bail!("adding logos to the repositories needs confirm=true, after the user has agreed (or logo_prs=false)");
+                    }
+                    let slugs = cc::review_slugs(&site, strs("slugs").unwrap_or_default(), a.get("all").and_then(|v| v.as_bool()) == Some(true))?;
+                    cc::approve(&site, &slugs, prs, a.get("merge").and_then(|v| v.as_bool()).unwrap_or(true), &|l| eprintln!("{l}"))
+                }
+                "code_dismiss" => cc::dismiss(&site, &strs("slugs").unwrap_or_default()),
                 "code_sync" => Ok(serde_json::to_value(cc::sync(&site, a.get("logos").and_then(|v| v.as_bool()).unwrap_or(true), false, &|l| eprintln!("{l}"))?)?),
                 "code_logo_prompts" => {
                     let size = a.get("size").and_then(|v| v.as_u64()).unwrap_or(15).clamp(1, 50) as usize;
@@ -579,7 +595,7 @@ fn handle(root: &PathBuf, msg: &Value) -> Option<Value> {
                 "protocolVersion": v,
                 "capabilities": {"tools": {}},
                 "serverInfo": {"name": "gitwebsite", "version": env!("CARGO_PKG_VERSION")},
-                "instructions": format!("Manage {}: content, areas, ideas, registry, media, project stories (photos + interview → post), enhancements of existing posts (story_enhance), the code catalog of git projects at /code/ (code_* tools: sync from GitHub, descriptions, categories, tags, related projects, ChatGPT logo prompts in batches; logo pull requests write to the user's repositories — confirm first), build, and publish; and show the user things in the site's browser tools (tools_list → tool_info → tool_open opens a tool window in the app). Publishing updates the live site — always get the user's confirmation. {CONVENTIONS}", whose_site(root)),
+                "instructions": format!("Manage {}: content, areas, ideas, registry, media, project stories (photos + interview → post), enhancements of existing posts (story_enhance), the code catalog of git projects at /code/ (code_* tools: code_new_projects captures new repositories for review, then code_approve; sync from GitHub, descriptions, categories, tags, related projects, ChatGPT logo prompts in batches; logo pull requests write to the user's repositories — confirm first), build, and publish; and show the user things in the site's browser tools (tools_list → tool_info → tool_open opens a tool window in the app). Publishing updates the live site — always get the user's confirmation. {CONVENTIONS}", whose_site(root)),
             }))
         }
         "ping" => Ok(json!({})),

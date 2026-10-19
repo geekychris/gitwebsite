@@ -234,6 +234,7 @@ pub fn state(site: &Site) -> Result<Value> {
         })
         .collect();
     let listed = c.projects.iter().filter(|p| p.listed()).count();
+    let review = c.projects.iter().filter(|p| p.review && p.wanted()).count();
     let need_logo = codecat::logo_batches(&c, 1000).concat().len();
     let open_prs = pr_candidates(&c).len();
     let families: Vec<Value> = c
@@ -251,7 +252,7 @@ pub fn state(site: &Site) -> Result<Value> {
         "file": Catalog::path(&site.root).display().to_string(), "exists": exists,
         "title": c.title, "intro": c.intro, "owner": c.owner, "logo_style": c.logo_style, "default_logo_style": codecat::DEFAULT_LOGO_STYLE,
         "categories": c.categories, "families": families, "projects": projects,
-        "counts": { "all": c.projects.len(), "listed": listed, "need_logo": need_logo, "awaiting_pr": open_prs },
+        "counts": { "all": c.projects.len(), "listed": listed, "review": review, "need_logo": need_logo, "awaiting_pr": open_prs },
         "url": format!("{}{}", site.config.site.base_url.trim_end_matches('/'), codecat::URL),
         "job": job(),
     }))
@@ -519,6 +520,8 @@ pub fn sync(site: &Site, logos: bool, refresh_logos: bool, log: &dyn Fn(String))
     log(format!("{} repositories", repos.len()));
     modify(site, |c| {
         if c.owner.is_empty() { c.owner = owner.clone(); }
+        // The first sync fills the catalog; after that new repositories wait for review.
+        let first = c.projects.is_empty();
         let seen: BTreeSet<String> = repos.iter().filter_map(|x| x["nameWithOwner"].as_str()).map(|s| s.to_ascii_lowercase()).collect();
         for x in &repos {
             let Some(full) = x["nameWithOwner"].as_str() else { continue };
@@ -536,7 +539,7 @@ pub fn sync(site: &Site, logos: bool, refresh_logos: bool, log: &dyn Fn(String))
                     let hide = f.fork || f.archived;
                     let slug = c.new_slug(name);
                     if hide { r.added_hidden.push(slug.clone()); } else { r.added.push(slug.clone()); }
-                    c.projects.push(Project { slug, repo: full.to_string(), hidden: hide, added: today(), github: f, ..Default::default() });
+                    c.projects.push(Project { slug, repo: full.to_string(), hidden: hide, review: !hide && !first, added: today(), github: f, ..Default::default() });
                 }
             }
         }
@@ -557,7 +560,8 @@ pub fn sync(site: &Site, logos: bool, refresh_logos: bool, log: &dyn Fn(String))
 /// Look for logos in the repositories (in parallel) and copy those found into the site.
 fn find_logos(site: &Site, refresh: bool, r: &mut SyncReport, log: &dyn Fn(String)) -> Result<()> {
     let c = load(site)?;
-    let todo: Vec<Project> = c.projects.iter().filter(|p| p.listed() && p.logo_source != "imported" && (refresh || p.logo.is_empty())).cloned().collect();
+    // Projects showing a family mark are skipped too: their repositories carry that same mark.
+    let todo: Vec<Project> = c.projects.iter().filter(|p| p.wanted() && p.logo_source != "imported" && (refresh || c.logo_of(p).is_none())).cloned().collect();
     if todo.is_empty() {
         return Ok(());
     }
@@ -1423,6 +1427,107 @@ pub fn apply_scheme(site: &Site, s: &Scheme) -> Result<Value> {
     Ok(v)
 }
 
+// ------------------------------------------------------------------ new projects
+
+/// Projects waiting for review.
+fn in_review(c: &Catalog) -> Vec<String> {
+    c.projects.iter().filter(|p| p.review && p.wanted()).map(|p| p.slug.clone()).collect()
+}
+
+/// Save Claude's proposal (from [`enhance`]) as the project's entry.
+fn apply_proposal(site: &Site, slug: &str, p: &Value) -> Result<Value> {
+    let s = |k: &str| p[k].as_str().map(|x| x.trim().to_string()).filter(|x| !x.is_empty());
+    let list = |k: &str| p[k].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect::<Vec<_>>()).filter(|v| !v.is_empty());
+    update(site, slug, &Patch {
+        title: s("title"), summary: s("summary"), description: s("description"), category: s("category"),
+        tags: list("tags"), related: list("related"), logo_prompt: s("logo_prompt"), enhanced: Some(true),
+        ..Default::default()
+    })
+}
+
+/// Capture new projects: sync from GitHub (new repositories wait for review, off the website),
+/// look for logos in them, have Claude write each new one's entry (title, summary, description,
+/// category, tags, related projects, logo prompt), and write ChatGPT prompt files into the pickup
+/// folder for the logos still missing. Nothing goes on the website until [`approve`].
+pub fn new_projects(site: &Site, log: &dyn Fn(String)) -> Result<Value> {
+    let r = sync(site, true, false, log)?;
+    let c = load(site)?;
+    let todo: Vec<String> = c.projects.iter().filter(|p| p.review && p.wanted() && p.enhanced.is_empty()).map(|p| p.slug.clone()).collect();
+    let mut problems = r.problems.clone();
+    let mut written = vec![];
+    for (i, slug) in todo.iter().enumerate() {
+        log(format!("[{}/{}] Claude writes {slug}'s entry", i + 1, todo.len()));
+        match enhance(site, slug, log).and_then(|v| apply_proposal(site, slug, &v["proposal"])) {
+            Ok(_) => written.push(slug.clone()),
+            Err(e) => {
+                log(format!("{slug}: {e:#}"));
+                problems.push(format!("{slug}: {e:#}"));
+            }
+        }
+    }
+    let c = load(site)?;
+    let review = in_review(&c);
+    let need_logo: Vec<String> = review.iter().filter(|s| c.get(s).is_some_and(|p| c.logo_of(p).is_none())).cloned().collect();
+    let prompts = if need_logo.is_empty() { Value::Null } else { write_prompt_files(site, 15)? };
+    log(match review.len() {
+        0 => "No new projects".to_string(),
+        n => format!("{n} project{} waiting for review, {} without a logo{}", if n == 1 { "" } else { "s" }, need_logo.len(),
+            if need_logo.is_empty() { String::new() } else { format!(" — prompts in {}", prompts["prompts"].as_str().unwrap_or("")) }),
+    });
+    Ok(json!({ "added": r.added, "added_hidden": r.added_hidden, "gone": r.gone, "written": written, "review": review, "need_logo": need_logo, "prompts": prompts, "problems": problems }))
+}
+
+/// Put projects waiting for review on the website. With `logo_prs`, each one's imported logo is
+/// added to its repository's README (a pull request, merged when `merge`); a project whose logo
+/// comes later gets its PR from the Logos page then.
+pub fn approve(site: &Site, slugs: &[String], logo_prs_too: bool, merge: bool, log: &dyn Fn(String)) -> Result<Value> {
+    modify(site, |c| {
+        for s in slugs {
+            let p = c.get(s).with_context(|| format!("no project {s}"))?;
+            if !p.review {
+                bail!("{s} is not waiting for review");
+            }
+        }
+        for s in slugs {
+            if let Some(p) = c.get_mut(s) {
+                p.review = false;
+            }
+        }
+        Ok(())
+    })?;
+    log(format!("On the website: {}", slugs.join(", ")));
+    let prs = if logo_prs_too {
+        let cands = pr_candidates(&load(site)?);
+        let todo: Vec<String> = slugs.iter().filter(|s| cands.contains(s)).cloned().collect();
+        if todo.is_empty() { Value::Null } else { logo_prs(site, &todo, merge, log)? }
+    } else {
+        Value::Null
+    };
+    Ok(json!({ "approved": slugs, "logo_prs": prs }))
+}
+
+/// Keep projects waiting for review off the website for good (hidden; show them again any time).
+pub fn dismiss(site: &Site, slugs: &[String]) -> Result<Value> {
+    modify(site, |c| {
+        for s in slugs {
+            let p = c.get_mut(s).with_context(|| format!("no project {s}"))?;
+            p.review = false;
+            p.hidden = true;
+        }
+        Ok(())
+    })?;
+    Ok(json!({ "hidden": slugs }))
+}
+
+/// The projects waiting for review (every one, with `all`), else the named ones.
+pub fn review_slugs(site: &Site, slugs: Vec<String>, all: bool) -> Result<Vec<String>> {
+    let v = if all { in_review(&load(site)?) } else { slugs };
+    if v.is_empty() {
+        bail!(if all { "no projects are waiting for review" } else { "name projects, or all" });
+    }
+    Ok(v)
+}
+
 // ------------------------------------------------------------------ background jobs for the app
 
 pub fn start_sync(site: &Site, logos: bool, refresh_logos: bool) -> Result<Value> {
@@ -1435,6 +1540,12 @@ pub fn start_enhance(site: &Site, slug: &str) -> Result<Value> {
 }
 pub fn start_suggest(site: &Site) -> Result<Value> {
     start_job(site, "suggest", "categories", move |s, log| suggest(s, log))
+}
+pub fn start_new_projects(site: &Site) -> Result<Value> {
+    start_job(site, "new", "GitHub", move |s, log| new_projects(s, log))
+}
+pub fn start_approve(site: &Site, slugs: Vec<String>, logo_prs_too: bool, merge: bool) -> Result<Value> {
+    start_job(site, "approve", &format!("{} projects", slugs.len()), move |s, log| approve(s, &slugs, logo_prs_too, merge, log))
 }
 pub fn start_logo_prs(site: &Site, slugs: Vec<String>, merge: bool) -> Result<Value> {
     if slugs.is_empty() {
@@ -1566,6 +1677,30 @@ pub enum CodeCmd {
         #[arg(long)]
         batch: Option<usize>,
     },
+    /// Capture new projects: sync from GitHub, have Claude write each new project's entry, and
+    /// write logo prompt files for ChatGPT. New projects wait for review (`gw code approve`).
+    New,
+    /// Put projects waiting for review on the website and add their imported logos to their
+    /// READMEs (a pull request each, merged). Give slugs, or --all.
+    Approve {
+        slugs: Vec<String>,
+        #[arg(long)]
+        all: bool,
+        /// Don't open logo pull requests.
+        #[arg(long)]
+        no_logo_pr: bool,
+        /// Open the logo pull requests but leave them for you to merge.
+        #[arg(long)]
+        no_merge: bool,
+        /// Required when logo pull requests will be opened.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Keep projects waiting for review off the website (hidden).
+    Dismiss {
+        #[arg(required = true)]
+        slugs: Vec<String>,
+    },
     /// Open a pull request on each repository adding its imported logo (assets/logo.png) to the
     /// top of its README. Give slugs, or --all for every imported logo without a PR.
     LogoPr {
@@ -1654,6 +1789,15 @@ pub fn run_cli(site: &Site, c: CodeCmd) -> Result<Value> {
             Ok(Value::Null)
         }
         CodeCmd::ImportLogos { paths, batch } => import_logos(site, &paths, batch),
+        CodeCmd::New => new_projects(site, &print),
+        CodeCmd::Approve { slugs, all, no_logo_pr, no_merge, yes } => {
+            let slugs = review_slugs(site, slugs, all)?;
+            if !no_logo_pr && !yes {
+                bail!("this puts {} on the website and adds their logos to their repositories' READMEs (pull requests{}); run again with --yes, or --no-logo-pr", slugs.join(", "), if no_merge { "" } else { ", merged" });
+            }
+            approve(site, &slugs, !no_logo_pr, !no_merge, &print)
+        }
+        CodeCmd::Dismiss { slugs } => dismiss(site, &slugs),
         CodeCmd::LogoPr { slugs, all, merge, yes } => {
             let slugs = if all { awaiting_pr(site)? } else { slugs };
             if slugs.is_empty() {

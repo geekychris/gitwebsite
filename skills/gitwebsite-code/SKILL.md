@@ -15,6 +15,15 @@ the app's **Code** page. Run `gw site` first to know whose site it is.
   adds new public repos (forks/archived hidden), refreshes facts, finds logos in READMEs.
 - `gw code list [--need-logo]` [`code_list`], `gw code show <slug>`.
 
+## New projects (the usual way in)
+
+- `gw code new` [`code_new_projects`] — sync, then Claude writes each new repository's entry and
+  logo prompt files go to the pickup folder. New projects wait for review, off the website.
+- Show the user what came in; they edit, then `gw code approve <slug>… --yes` [`code_approve`,
+  `confirm: true`] puts them on the site and adds imported logos to their READMEs (PR, merged), or
+  `gw code dismiss <slug>` [`code_dismiss`] hides them. Approving writes to their repositories —
+  ask first.
+
 ## Improve a project's text
 
 Get the context — `code_get` (fields, README, categories, other projects, the house voice) — and

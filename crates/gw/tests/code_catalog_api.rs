@@ -75,3 +75,49 @@ async fn edit_categorise_and_import_a_logo_over_http() {
     assert_eq!(v["count"], 1);
     assert!(v["batches"][0]["text"].as_str().unwrap().contains("FILE NAME: other.png"));
 }
+
+#[tokio::test]
+async fn new_projects_wait_for_review() {
+    let site = std::env::temp_dir().join(format!("gw-code-review-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&site);
+    std::fs::create_dir_all(site.join("content")).unwrap();
+    std::fs::write(site.join("site.yaml"), "site:\n  title: T\n  base_url: https://example.org\n  author: A\n").unwrap();
+    std::fs::write(site.join("code.yaml"), "owner: me\nprojects:\n  - { slug: old, repo: me/old }\n  - { slug: fresh, repo: me/fresh, review: true }\n  - { slug: meh, repo: me/meh, review: true }\n").unwrap();
+
+    let port = serve(gw::server::router(Some(site.clone()))).await;
+    let api = |p: &str| format!("http://127.0.0.1:{port}/api{p}");
+    let c = reqwest::Client::new();
+
+    let v: Value = c.get(api("/code")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(v["counts"]["listed"], 1);
+    assert_eq!(v["counts"]["review"], 2);
+    // Both still get logo prompts.
+    let v: Value = c.get(api("/code/logo-prompts?size=15")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(v["count"], 3);
+
+    // Approving with logo PRs needs confirm; without them it doesn't.
+    let r = c.post(api("/code/approve")).json(&json!({ "slugs": ["fresh"] })).send().await.unwrap();
+    assert_eq!(r.status(), 400);
+    let r = c.post(api("/code/approve")).json(&json!({ "slugs": ["old"], "logo_prs": false })).send().await.unwrap();
+    assert!(r.status().is_success(), "a job starts; it fails because old is not in review");
+    let mut job = Value::Null;
+    for _ in 0..50 {
+        job = c.get(api("/code/job")).send().await.unwrap().json().await.unwrap();
+        if job["running"] != true { break; }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(job["error"].as_str().unwrap_or("").contains("not waiting for review"), "{job}");
+    c.post(api("/code/approve")).json(&json!({ "slugs": ["fresh"], "logo_prs": false })).send().await.unwrap();
+    for _ in 0..50 {
+        job = c.get(api("/code/job")).send().await.unwrap().json().await.unwrap();
+        if job["running"] != true { break; }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    let r = c.post(api("/code/dismiss")).json(&json!({ "slugs": ["meh"] })).send().await.unwrap();
+    assert!(r.status().is_success());
+    let v: Value = c.get(api("/code")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(v["counts"]["listed"], 2);
+    assert_eq!(v["counts"]["review"], 0);
+    let meh = v["projects"].as_array().unwrap().iter().find(|p| p["slug"] == "meh").unwrap().clone();
+    assert_eq!(meh["hidden"], true);
+}
