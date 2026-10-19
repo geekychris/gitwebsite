@@ -468,6 +468,44 @@ mod code_api {
         let b = body.map(|b| b.0).unwrap_or_default();
         with_site(&st, move |s| cc::start_sync(s, !b.no_logos, b.refresh_logos)).await
     }
+    /// POST /api/code/new — capture new projects: sync, Claude writes their entries, logo prompt
+    /// files (a job). They wait for review.
+    pub async fn new_projects(State(st): State<AppState>) -> ApiResult {
+        with_site(&st, cc::start_new_projects).await
+    }
+    #[derive(Deserialize)]
+    pub struct ReviewBody {
+        #[serde(default)]
+        slugs: Vec<String>,
+        #[serde(default)]
+        all: bool,
+        #[serde(default = "yes")]
+        logo_prs: bool,
+        #[serde(default = "yes")]
+        merge: bool,
+        #[serde(default)]
+        confirm: bool,
+    }
+    fn yes() -> bool {
+        true
+    }
+    /// POST /api/code/approve {slugs | all, logo_prs? (true), merge? (true), confirm} — puts
+    /// projects waiting for review on the website and adds their logos to their READMEs (a job;
+    /// the pull requests need confirm: true).
+    pub async fn approve(State(st): State<AppState>, Json(b): Json<ReviewBody>) -> ApiResult {
+        if b.logo_prs && !b.confirm {
+            return Err(ApiError::bad("adding logos to the repositories needs confirm: true (or logo_prs: false)"));
+        }
+        with_site(&st, move |s| {
+            let slugs = cc::review_slugs(s, b.slugs, b.all)?;
+            cc::start_approve(s, slugs, b.logo_prs, b.merge)
+        })
+        .await
+    }
+    /// POST /api/code/dismiss {slugs} — keeps projects waiting for review off the website.
+    pub async fn dismiss(State(st): State<AppState>, Json(b): Json<ReviewBody>) -> ApiResult {
+        with_site(&st, move |s| cc::dismiss(s, &cc::review_slugs(s, b.slugs, b.all)?)).await
+    }
     /// POST /api/code/projects/{slug}/enhance — starts Claude on a proposal (the job's result).
     pub async fn enhance(State(st): State<AppState>, AxPath(slug): AxPath<String>) -> ApiResult {
         with_site(&st, move |s| cc::start_enhance(s, &slug)).await
@@ -1269,6 +1307,9 @@ fn router_for(st: AppState) -> Router {
         .route("/api/code", get(code_api::state).put(code_api::settings))
         .route("/api/code/job", get(code_api::job))
         .route("/api/code/sync", post(code_api::sync))
+        .route("/api/code/new", post(code_api::new_projects))
+        .route("/api/code/approve", post(code_api::approve))
+        .route("/api/code/dismiss", post(code_api::dismiss))
         .route("/api/code/suggest", post(code_api::suggest))
         .route("/api/code/scheme", post(code_api::scheme))
         .route("/api/code/family", post(code_api::family))
