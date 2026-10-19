@@ -3,6 +3,7 @@
 //! Credentials live in the macOS Keychain, entered by the user in a terminal — never in
 //! arguments, files, or chat.
 
+pub mod code_catalog;
 pub mod html2adoc;
 pub mod keychain;
 pub mod meshy;

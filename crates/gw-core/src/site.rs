@@ -134,6 +134,7 @@ impl Site {
             }
         }
         problems.extend(crate::gallery::check(&self.root, &self.static_dir(), &media));
+        problems.extend(crate::codecat::check(&self.root, &self.static_dir()));
         Ok(problems)
     }
 }

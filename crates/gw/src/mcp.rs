@@ -230,6 +230,34 @@ fn tools() -> Value {
             "after_line": {"type": "integer", "description": "Put it after this 1-based line (default: end of the post)"}}), &["id", "model"])},
         {"name": "post_remove_model", "description": "Take a 3-D model out of a post (its model:: line). Give the model (media key or <project>/<slug>) or its index from post_models. Saves the post's file.",
          "inputSchema": s(json!({"id": str_("Item id, slug, or URL"), "model": str_("Media key or <project>/<slug>"), "index": {"type": "integer", "description": "0-based, from post_models"}}), &["id"])},
+        {"name": "code_list", "description": "The code catalog (/code/ on the website, code.yaml): the site's git projects with slug, repo, title, summary, category, tags, related, listed (on the website), logo; the categories; counts. Projects without a logo get one from ChatGPT (code_logo_prompts).",
+         "inputSchema": s(json!({"need_logo": {"type": "boolean", "description": "Only listed projects without a logo"}}), &[])},
+        {"name": "code_get", "description": "One code-catalog project, with its README from GitHub, the categories, the other projects (for related) and the house writing voice — what you need to improve its text. Then save with code_update.",
+         "inputSchema": s(json!({"slug": str_("Project slug")}), &["slug"])},
+        {"name": "code_update", "description": "Change a code-catalog project (only the fields given). description: 2-4 short paragraphs; `code`, **bold**, [text](https://…) links and '- ' bullets. tags: lower-case. related: slugs of other projects (shown both ways). category: an id from code_list (add one with code_category). hidden: leave it off the website. Set enhanced=true when you rewrote its text.",
+         "inputSchema": s(json!({"slug": str_("Project slug"), "title": str_("Display name"), "summary": str_("One sentence for the tile, ≤140 chars"),
+            "description": str_("The project page's text"), "category": str_("Category id"), "tags": arr("Tags (replaces)"), "related": arr("Related project slugs (replaces)"),
+            "hidden": {"type": "boolean"}, "featured": {"type": "boolean"}, "logo_prompt": str_("A hand-written image prompt for its logo"),
+            "post": str_("Content id of the post that writes it up (if not found by its :repo:)"), "enhanced": {"type": "boolean"},
+            "family": str_("Logo family id (its shared mark is used when the project has no logo); \"\" to leave it")}), &["slug"])},
+        {"name": "code_family", "description": "Add or change a code-catalog logo family: projects that share one mark (e.g. a framework's modules). Give the mark's idea as concept; add members by slug (add) or by category (categories). Its prompt then appears in code_logo_prompts as one item (file family-<id>.png); remove deletes the family.",
+         "inputSchema": s(json!({"id": str_("Short kebab-case id"), "title": str_("Name"), "description": str_("What the family is"), "concept": str_("The mark's idea, e.g. a stylised red bull"),
+            "logo_prompt": str_("A hand-written prompt instead"), "add": arr("Project slugs to add"), "categories": arr("Add every project in these categories"), "drop": arr("Project slugs to take out"), "remove": {"type": "boolean"}}), &["id"])},
+        {"name": "code_category", "description": "Add or change a code-catalog category (id, title, description), or remove it (its projects lose the category).",
+         "inputSchema": s(json!({"id": str_("Short kebab-case id"), "title": str_("Title"), "description": str_("One sentence"), "remove": {"type": "boolean"}}), &["id"])},
+        {"name": "code_apply_scheme", "description": "Set the code catalog's categories and each project's category and tags at once. categories replaces the list (in display order). Projects keep a category they have unless overwrite=true; tags are added (replaced with overwrite).",
+         "inputSchema": s(json!({"categories": {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "string"}, "title": {"type": "string"}, "description": {"type": "string"}}, "required": ["id", "title"]}},
+            "projects": {"type": "object", "description": "slug → {category, tags}", "additionalProperties": {"type": "object", "properties": {"category": {"type": "string"}, "tags": {"type": "array", "items": {"type": "string"}}}}},
+            "overwrite": {"type": "boolean"}}), &[])},
+        {"name": "code_sync", "description": "Read the owner's repositories from GitHub (gh CLI) into the code catalog: new public repositories are added (forks and archived ones hidden), facts refreshed, and logos found in READMEs copied into the site. Takes a minute or more.",
+         "inputSchema": s(json!({"logos": {"type": "boolean", "description": "Look for logos (default true)"}}), &[])},
+        {"name": "code_logo_prompts", "description": "Image prompts for the code-catalog logos still missing, in numbered batches (text to paste into ChatGPT; each item names the file to save the image as, <slug>.png). The user imports the images in the app's Code page or with `gw code import-logos`.",
+         "inputSchema": s(json!({"size": {"type": "integer", "description": "Logos per batch (default 15)"},
+            "write": {"type": "boolean", "description": "Also write every batch into the pickup folder's prompts/ (batch-NN.txt to paste, batch-NN.json with the order)"}}), &[])},
+        {"name": "code_import_logos", "description": "Import rendered logos — by default everything in the pickup folder (images and zips): images named as the prompts asked (<slug>.png, family-<id>.png) match by name; with batch=N, images whose names match nothing are matched to that batch's missing logos in the order they were saved (only if the counts agree). Look at the images (they are moved to imported/) to check order matches before telling the user.",
+         "inputSchema": s(json!({"paths": arr("Files or folders (default: the pickup folder)"), "batch": {"type": "integer", "description": "Batch number, to match unnamed images by order"}}), &[])},
+        {"name": "code_logo_pr", "description": "Open a pull request on a project's GitHub repository adding its imported logo (assets/logo.png) at the top of its README, and with merge=true merge it. This WRITES TO THE USER'S REPOSITORIES: list what you will do and get explicit confirmation, then pass confirm=true.",
+         "inputSchema": s(json!({"slugs": arr("Project slugs"), "all": {"type": "boolean", "description": "Every imported logo without a PR"}, "merge": {"type": "boolean", "description": "Also squash-merge each PR and delete its branch"}, "confirm": {"type": "boolean"}}), &["confirm"])},
     ])
 }
 
@@ -296,6 +324,50 @@ fn call(root: &PathBuf, name: &str, a: &Value) -> Result<Value> {
             })
         }
         "post_models" => crate::integrations::site_models::post_models(&site, req(a, "id")?),
+        "code_list" | "code_get" | "code_update" | "code_category" | "code_family" | "code_apply_scheme" | "code_sync" | "code_logo_prompts" | "code_import_logos" | "code_logo_pr" => {
+            use crate::integrations::code_catalog as cc;
+            let strs = |k: &str| a.get(k).and_then(|v| v.as_array()).map(|x| x.iter().filter_map(|s| s.as_str().map(str::to_string)).collect::<Vec<_>>());
+            match name {
+                "code_list" => cc::run_cli(&site, cc::CodeCmd::List { need_logo: a.get("need_logo").and_then(|v| v.as_bool()).unwrap_or(false) }),
+                "code_get" => {
+                    let slug = req(a, "slug")?;
+                    let mut v = cc::context(&site, slug)?;
+                    v["page"] = cc::show(&site, slug)?;
+                    Ok(v)
+                }
+                "code_update" => {
+                    let p = cc::Patch {
+                        title: sv(a, "title").map(str::to_string), summary: sv(a, "summary").map(str::to_string),
+                        description: sv(a, "description").map(str::to_string), category: sv(a, "category").map(str::to_string),
+                        tags: strs("tags"), related: strs("related"),
+                        hidden: a.get("hidden").and_then(|v| v.as_bool()), featured: a.get("featured").and_then(|v| v.as_bool()),
+                        logo_prompt: sv(a, "logo_prompt").map(str::to_string), post: sv(a, "post").map(str::to_string),
+                        enhanced: a.get("enhanced").and_then(|v| v.as_bool()), order: None,
+                        family: sv(a, "family").map(str::to_string),
+                    };
+                    cc::update(&site, req(a, "slug")?, &p)
+                }
+                "code_family" => cc::family(&site, &serde_json::from_value(a.clone())?).map(|v| json!({ "added": v["added"], "families": v["families"] })),
+                "code_category" => cc::category(&site, req(a, "id")?, sv(a, "title"), sv(a, "description"), a.get("remove").and_then(|v| v.as_bool()).unwrap_or(false)),
+                "code_apply_scheme" => cc::apply_scheme(&site, &serde_json::from_value(a.clone())?).map(|v| json!({ "applied": v["applied"], "categories": v["categories"] })),
+                "code_sync" => Ok(serde_json::to_value(cc::sync(&site, a.get("logos").and_then(|v| v.as_bool()).unwrap_or(true), false, &|l| eprintln!("{l}"))?)?),
+                "code_logo_prompts" => {
+                    let size = a.get("size").and_then(|v| v.as_u64()).unwrap_or(15).clamp(1, 50) as usize;
+                    if a.get("write").and_then(|v| v.as_bool()) == Some(true) { cc::write_prompt_files(&site, size) } else { cc::logo_prompts(&site, size) }
+                }
+                "code_import_logos" => cc::import_logos(&site, &strs("paths").unwrap_or_default().into_iter().map(PathBuf::from).collect::<Vec<_>>(), a.get("batch").and_then(|v| v.as_u64()).map(|n| n as usize)),
+                _ => {
+                    if a.get("confirm").and_then(|v| v.as_bool()) != Some(true) {
+                        bail!("opening pull requests needs confirm=true, after the user has agreed");
+                    }
+                    let slugs = if a.get("all").and_then(|v| v.as_bool()) == Some(true) { cc::awaiting_pr(&site)? } else { strs("slugs").unwrap_or_default() };
+                    if slugs.is_empty() {
+                        bail!("name slugs, or all=true");
+                    }
+                    cc::logo_prs(&site, &slugs, a.get("merge").and_then(|v| v.as_bool()) == Some(true), &|l| eprintln!("{l}"))
+                }
+            }
+        }
         "post_add_model" | "post_remove_model" => {
             use crate::integrations::site_models::{post_change, PostChange};
             let ch = PostChange {
@@ -507,7 +579,7 @@ fn handle(root: &PathBuf, msg: &Value) -> Option<Value> {
                 "protocolVersion": v,
                 "capabilities": {"tools": {}},
                 "serverInfo": {"name": "gitwebsite", "version": env!("CARGO_PKG_VERSION")},
-                "instructions": format!("Manage {}: content, areas, ideas, registry, media, project stories (photos + interview → post), enhancements of existing posts (story_enhance), build, and publish; and show the user things in the site's browser tools (tools_list → tool_info → tool_open opens a tool window in the app). Publishing updates the live site — always get the user's confirmation. {CONVENTIONS}", whose_site(root)),
+                "instructions": format!("Manage {}: content, areas, ideas, registry, media, project stories (photos + interview → post), enhancements of existing posts (story_enhance), the code catalog of git projects at /code/ (code_* tools: sync from GitHub, descriptions, categories, tags, related projects, ChatGPT logo prompts in batches; logo pull requests write to the user's repositories — confirm first), build, and publish; and show the user things in the site's browser tools (tools_list → tool_info → tool_open opens a tool window in the app). Publishing updates the live site — always get the user's confirmation. {CONVENTIONS}", whose_site(root)),
             }))
         }
         "ping" => Ok(json!({})),

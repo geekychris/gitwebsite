@@ -7,6 +7,8 @@
 //! - `/publications/` from registry entries of kind `publication`
 //! - `/models/<project>/<slug>/`: the 3-D models gallery's model pages, and `/models/`: its grid,
 //!   or — when a post has a `models::gallery[]` block — a redirect to that post (see [`crate::gallery`])
+//! - `/code/` and `/code/<slug>/`: the code catalog of git projects, from `code.yaml` (see
+//!   [`crate::codecat`])
 //! - `feed.xml` (Atom), `sitemap.xml`, `search.json`, `robots.txt`, `404.html`
 //!
 //! Drafts are left out unless `drafts` is set (for local preview). Unlisted items are built
@@ -599,6 +601,31 @@ pub fn build(site: &Site, opts: &BuildOptions) -> Result<BuildReport> {
         }
     }
 
+    // The code catalog (code.yaml + static/code-logos/): /code/ and a page per project.
+    let mut code_urls: Vec<String> = vec![];
+    if let Some(cat) = crate::codecat::Catalog::load(&site.root)? {
+        let posts: Vec<crate::codecat::PostRef> = listed
+            .iter()
+            .map(|v| crate::codecat::PostRef { id: &v.item.id, url: &v.item.url, title: &v.item.title, repo: v.item.repo.as_deref() })
+            .collect();
+        let cp = crate::codecat::pages(&cat, &st_dir, &posts, &cfg.site.base_url, &mut warnings);
+        if cp.count > 0 {
+            let mut c = base(crate::codecat::URL, &cp.title, false);
+            c.insert("code", &cp);
+            write("code/index.html", tera.render("code.html", &c).context("rendering code.html")?, &mut files)?;
+            code_urls.push(crate::codecat::URL.into());
+            for g in &cp.groups {
+                for p in &g.cards {
+                    let mut c = base(&p.url, &p.title, false);
+                    c.insert("heading", &cp.title);
+                    c.insert("p", p);
+                    write(&page_file(&p.url), tera.render("code_project.html", &c).with_context(|| format!("rendering code_project.html for {}", p.slug))?, &mut files)?;
+                    code_urls.push(p.url.clone());
+                }
+            }
+        }
+    }
+
     {
         let pubs: Vec<&Entry> = registry.entries.iter().filter(|e| e.kind == "publication").collect();
         let mut groups: Vec<(String, Vec<&Entry>)> = vec![];
@@ -624,6 +651,7 @@ pub fn build(site: &Site, opts: &BuildOptions) -> Result<BuildReport> {
         let mut urls: Vec<String> = vec!["/".into(), "/articles/".into(), "/projects/".into(), "/areas/".into(), "/lab/".into(), "/tools/".into()];
         urls.extend(listed.iter().map(|v| v.item.url.clone()));
         urls.extend(gallery_urls.iter().cloned());
+        urls.extend(code_urls.iter().cloned());
         urls.extend(cfg.flat_areas().into_iter().map(|(p, _)| format!("/areas/{p}/")));
         let pubs_public = registry.entries.iter().any(|e| e.kind == "publication")
             && registry.entries.iter().filter(|e| e.kind == "publication").all(|e| e.visibility == "public");

@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{# The code catalog: /code/ — the site's git projects by category (code.yaml; see codecat.rs).
+   Without JavaScript it is a plain list of tiles; with it, the filter box, the category chips and
+   the tags (#tag=<tag> in the address) narrow the grid. #}
+{% block description %}{{ code.intro }}{% endblock %}
+{% block og %}<meta property="og:type" content="website"><meta property="og:description" content="{{ code.intro }}">{% endblock %}
+{% block head %}<link rel="stylesheet" href="/css/code.css">{% endblock %}
+{% block main %}
+<section class="wrap block page-top code-index" data-code-index>
+  <h1>{{ code.title }}</h1>
+  <p class="lede">{{ code.intro }}</p>
+  <div class="code-filterbar">
+    <input class="code-filter" type="search" placeholder="Search {{ code.count }} projects…" aria-label="Search projects" data-code-filter>
+    <p class="code-count" aria-live="polite"><span data-code-shown>{{ code.count }}</span> of {{ code.count }}</p>
+  </div>
+  {% if code.groups | length > 1 %}
+  <nav class="code-chips" aria-label="Categories" data-code-chips>
+    <button type="button" class="code-chip" aria-pressed="true" data-cat="">All <span>{{ code.count }}</span></button>
+    {% for g in code.groups %}<button type="button" class="code-chip" aria-pressed="false" data-cat="{{ g.id }}"{% if g.description %} title="{{ g.description }}"{% endif %}>{{ g.title }} <span>{{ g.cards | length }}</span></button>{% endfor %}
+  </nav>
+  {% endif %}
+  <p class="code-tagline" data-code-tagline hidden>Tagged <strong data-code-tagname></strong> · <a href="#" data-code-cleartag>show all</a></p>
+  {% for g in code.groups %}
+  <section class="code-group" data-code-group="{{ g.id }}" id="{{ g.id }}">
+    <h2 class="section-title">{{ g.title }}</h2>
+    {% if g.description %}<p class="code-group-desc">{{ g.description }}</p>{% endif %}
+    <ul class="code-grid">
+      {% for p in g.cards %}
+      <li class="code-card" data-code-card data-text="{{ p.search_text }}" data-tags="{{ p.tags | join(sep=' ') }}">
+        <a href="{{ p.url }}">
+          {% if p.logo %}<img class="code-logo" src="{{ p.logo }}" alt="" width="56" height="56" loading="lazy" decoding="async">{% else %}<span class="code-logo code-mono" style="--h: {{ p.hue }}" aria-hidden="true">{{ p.monogram }}</span>{% endif %}
+          <span class="code-body">
+            <strong>{{ p.title }}{% if p.featured %} <span class="code-star" title="Featured">★</span>{% endif %}</strong>
+            {% if p.summary %}<span class="code-sum">{{ p.summary }}</span>{% endif %}
+            <span class="code-facts">{% if p.language %}<span>{{ p.language }}</span>{% endif %}{% if p.stars %}<span title="GitHub stars">★ {{ p.stars }}</span>{% endif %}{% if p.archived %}<span>archived</span>{% endif %}</span>
+          </span>
+        </a>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endfor %}
+  <p class="empty" data-code-none hidden>No projects match.</p>
+  {% if code.tags %}
+  <h2 class="section-title">Tags</h2>
+  <p class="code-tags">{% for t in code.tags %}{% if t.count > 1 or code.tags | length <= 40 %}<a class="chip" href="#tag={{ t.tag | urlencode }}" data-tag="{{ t.tag }}">{{ t.tag }} <span class="count">{{ t.count }}</span></a>{% endif %}{% endfor %}</p>
+  {% if code.tags | length > 40 %}<details class="code-more-tags"><summary>Tags used once</summary>
+  <p class="code-tags">{% for t in code.tags %}{% if t.count == 1 %}<a class="chip" href="#tag={{ t.tag | urlencode }}" data-tag="{{ t.tag }}">{{ t.tag }}</a>{% endif %}{% endfor %}</p></details>{% endif %}
+  {% endif %}
+</section>
+<script src="/js/code.js" defer></script>
+{% endblock %}

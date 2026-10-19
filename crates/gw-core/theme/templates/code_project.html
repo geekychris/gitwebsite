@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{# One project of the code catalog: /code/<slug>/ (code.yaml; see codecat.rs). #}
+{% block description %}{{ p.summary }}{% endblock %}
+{% block og %}<meta property="og:type" content="article"><meta property="og:description" content="{{ p.summary }}">{% if p.og_image %}<meta property="og:image" content="{{ p.og_image }}"><meta property="og:image:alt" content="{{ p.title }} logo">{% endif %}{% endblock %}
+{% block head %}<link rel="stylesheet" href="/css/code.css">{% endblock %}
+{% block main %}
+<article class="wrap narrow block page-top code-page">
+  <p class="code-crumbs"><a href="/code/">{{ heading }}</a> <span aria-hidden="true">›</span> <a href="/code/#{{ p.category }}">{{ p.category_title }}</a></p>
+  <header class="code-head">
+    {% if p.logo %}<img class="code-logo big" src="{{ p.logo }}" alt="{{ p.title }} logo" width="112" height="112" decoding="async">{% else %}<span class="code-logo big code-mono" style="--h: {{ p.hue }}" aria-hidden="true">{{ p.monogram }}</span>{% endif %}
+    <div>
+      <h1>{{ p.title }}</h1>
+      {% if p.summary %}<p class="lede">{{ p.summary }}</p>{% endif %}
+    </div>
+  </header>
+  <p class="code-actions">
+    <a class="button" href="{{ p.repo_url }}">View on GitHub</a>
+    {% if p.homepage %}<a class="button ghost" href="{{ p.homepage }}">Website</a>{% endif %}
+    {% if p.post_url %}<a class="button ghost" href="{{ p.post_url }}" title="{{ p.post_title }}">Read the write-up</a>{% endif %}
+  </p>
+  <dl class="code-facts-list">
+    <div><dt>Repository</dt><dd><a href="{{ p.repo_url }}">{{ p.repo }}</a></dd></div>
+    {% if p.language %}<div><dt>Language</dt><dd>{{ p.language }}</dd></div>{% endif %}
+    {% if p.pushed_human %}<div><dt>Last updated</dt><dd><time datetime="{{ p.pushed }}">{{ p.pushed_human }}</time></dd></div>{% endif %}
+    {% if p.stars %}<div><dt>Stars</dt><dd>{{ p.stars }}</dd></div>{% endif %}
+    {% if p.license %}<div><dt>Licence</dt><dd>{{ p.license }}</dd></div>{% endif %}
+    {% if p.archived %}<div><dt>Status</dt><dd>Archived</dd></div>{% endif %}
+  </dl>
+  {% if p.description_html %}<div class="prose code-desc">{{ p.description_html | safe }}</div>{% endif %}
+  {% if p.tags %}<p class="chips code-page-tags">{% for t in p.tags %}<a class="chip" href="/code/#tag={{ t | urlencode }}">{{ t }}</a>{% endfor %}</p>{% endif %}
+  {% if p.related %}
+  <h2 class="section-title">Related projects</h2>
+  <ul class="code-grid code-related">
+    {% for r in p.related %}
+    <li class="code-card"><a href="{{ r.url }}">
+      {% if r.logo %}<img class="code-logo" src="{{ r.logo }}" alt="" width="56" height="56" loading="lazy" decoding="async">{% else %}<span class="code-logo code-mono" style="--h: {{ r.hue }}" aria-hidden="true">{{ r.monogram }}</span>{% endif %}
+      <span class="code-body"><strong>{{ r.title }}</strong>{% if r.summary %}<span class="code-sum">{{ r.summary }}</span>{% endif %}</span>
+    </a></li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</article>
+{% endblock %}
