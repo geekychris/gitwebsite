@@ -681,6 +681,26 @@ pub fn normalise_logo(bytes: &[u8], max_px: u32) -> Result<(Vec<u8>, &'static st
 
 /// A small, safe Markdown subset for descriptions: paragraphs, `- ` bullets, `code`,
 /// **bold**, [text](http…) links. Everything else is text.
+/// What a search matches, lower case and on one line: the fields joined, `_` and `-` also
+/// read as spaces (so "amiga" finds amiga_mcp and "boing ball" finds opengl-boingball's text).
+pub fn search_text(parts: &[&str]) -> String {
+    let all = parts.iter().filter(|s| !s.is_empty()).cloned().collect::<Vec<_>>().join(" ").to_lowercase();
+    let spaced = all.replace(['_', '-'], " ");
+    let mut out = all.split_whitespace().collect::<Vec<_>>().join(" ");
+    if spaced != all {
+        out.push(' ');
+        out.push_str(&spaced.split_whitespace().collect::<Vec<_>>().join(" "));
+    }
+    out
+}
+
+/// Markdown as plain text (no markup characters), cut at about `n` characters.
+pub fn plain(md: &str, n: usize) -> String {
+    let text: String = md.chars().map(|c| if "#*`_[]()>|".contains(c) { ' ' } else { c }).collect();
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.chars().count() <= n { text } else { text.chars().take(n).collect() }
+}
+
 pub fn md_html(text: &str) -> String {
     let mut out = vec![];
     for block in text.replace("\r\n", "\n").split("\n\n").map(str::trim).filter(|b| !b.is_empty()) {
@@ -897,7 +917,7 @@ pub fn pages(c: &Catalog, static_dir: &Path, posts: &[PostRef], base_url: &str, 
             hue: hue(&p.slug),
             category_title: c.category_title(&p.category),
             category: if p.category.is_empty() { "other".into() } else { p.category.clone() },
-            search_text: format!("{title} {} {summary} {} {} {}", p.name(), tags.join(" "), p.github.language, p.github.topics.join(" ")).to_lowercase(),
+            search_text: search_text(&[&title, &p.slug, &p.repo, &summary, &tags.join(" "), &p.github.language, &p.github.topics.join(" "), &c.category_title(&p.category), &plain(&p.description, 600)]),
             og_image: if logo.is_empty() { String::new() } else { format!("{base}{logo}") },
             description_html: md_html(&p.description),
             language: p.github.language.clone(),
@@ -947,6 +967,15 @@ pub fn pages(c: &Catalog, static_dir: &Path, posts: &[PostRef], base_url: &str, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn search_text_reads_separators_as_spaces() {
+        let t = search_text(&["Amiga DevBench", "amiga-mcp", "me/amiga_mcp", "", "Retro computing"]);
+        assert!(t.starts_with("amiga devbench amiga-mcp me/amiga_mcp retro computing"));
+        assert!(t.contains("amiga mcp") && !t.contains("  "));
+        assert_eq!(plain("## Hi\n\nA *bold* [link](x).", 100), "Hi A bold link x .");
+        assert_eq!(plain("abcdef", 3), "abc");
+    }
 
     #[test]
     fn adoc_logo_goes_after_the_header() {

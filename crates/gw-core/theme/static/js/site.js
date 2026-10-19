@@ -17,26 +17,33 @@
     input.value = '';
     results.innerHTML = '';
     input.focus();
-    if (!index) index = await fetch('/search.json').then(r => r.json()).catch(() => []);
+    if (!index) {
+      index = await fetch('/search.json').then(r => r.json()).catch(() => []);
+      // Whatever was typed while the index loaded.
+      if (input.value) render();
+    }
   }
   function closeSearch() { overlay.hidden = true; }
+  // Every term must appear (in the title, summary, kind, areas, tags or, for code projects, their
+  // text); the title counts most. `_` and `-` read as spaces, so "amiga" finds amiga_mcp.
   function score(item, terms) {
-    const hay = [item.title, item.summary, item.kind, ...(item.areas || []), ...(item.tags || [])].join(' ').toLowerCase();
+    if (!item.hay) item.hay = [item.title, item.summary, item.kind, ...(item.areas || []), ...(item.tags || []), item.text || ''].join(' ').toLowerCase().replace(/[_-]/g, ' ');
     let s = 0;
     for (const t of terms) {
-      if (!hay.includes(t)) return 0;
+      if (!item.hay.includes(t)) return 0;
       s += item.title.toLowerCase().includes(t) ? 3 : 1;
     }
     return s;
   }
-  input && input.addEventListener('input', () => {
-    const terms = input.value.toLowerCase().split(/\s+/).filter(Boolean);
+  function render() {
+    const terms = input.value.toLowerCase().replace(/[_-]/g, ' ').split(/\s+/).filter(Boolean);
     if (!terms.length || !index) { results.innerHTML = ''; return; }
-    const hits = index.map(i => [score(i, terms), i]).filter(([s]) => s > 0).sort((a, b) => b[0] - a[0]).slice(0, 12);
+    const hits = index.map(i => [score(i, terms), i]).filter(([s]) => s > 0).sort((a, b) => b[0] - a[0]).slice(0, 30);
     results.innerHTML = hits.map(([, i]) =>
       `<li><a href="${i.url}">${esc(i.title)}<small>${esc(i.kind)}${i.date ? ' · ' + i.date : ''}${i.summary ? ' — ' + esc(i.summary) : ''}</small></a></li>`
     ).join('') || '<li><a>No matches</a></li>';
-  });
+  }
+  input && input.addEventListener('input', render);
   document.querySelectorAll('[data-search-open]').forEach(b => b.addEventListener('click', openSearch));
   overlay && overlay.addEventListener('click', e => { if (e.target === overlay) closeSearch(); });
   document.addEventListener('keydown', e => {

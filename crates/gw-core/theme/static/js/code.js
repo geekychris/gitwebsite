@@ -18,21 +18,39 @@
     tag = h.startsWith('tag=') ? h.slice(4) : '';
     cat = !tag && groups.some(g => g.dataset.codeGroup === h) ? h : '';
   };
+  const groupOf = c => c.closest('[data-code-group]').dataset.codeGroup;
   const run = () => {
-    const words = (box.value || '').toLowerCase().trim().split(/\s+/).filter(Boolean);
-    let n = 0;
+    // `_` and `-` read as spaces, as in each card's text.
+    const words = (box.value || '').toLowerCase().replace(/[_-]/g, ' ').trim().split(/\s+/).filter(Boolean);
+    let n = 0, anywhere = 0;
+    const perCat = {};
     cards.forEach(c => {
-      const ok = words.every(w => c.dataset.text.includes(w))
-        && (!tag || c.dataset.tags.split(' ').includes(tag))
-        && (!cat || c.closest('[data-code-group]').dataset.codeGroup === cat);
+      const text = words.every(w => c.dataset.text.includes(w)) && (!tag || c.dataset.tags.split(' ').includes(tag));
+      if (text) { anywhere++; perCat[groupOf(c)] = (perCat[groupOf(c)] || 0) + 1; }
+      const ok = text && (!cat || groupOf(c) === cat);
       c.hidden = !ok;
       if (ok) n++;
     });
     groups.forEach(g => (g.hidden = !g.querySelector('[data-code-card]:not([hidden])')));
-    chips.forEach(b => b.setAttribute('aria-pressed', String(b.dataset.cat === cat)));
+    // The chips count what the search finds in each category.
+    chips.forEach(b => {
+      b.setAttribute('aria-pressed', String(b.dataset.cat === cat));
+      const k = b.dataset.cat ? perCat[b.dataset.cat] || 0 : anywhere;
+      b.querySelector('span').textContent = k;
+      b.classList.toggle('code-chip-empty', !k);
+    });
     tagLinks.forEach(a => a.toggleAttribute('aria-current', a.dataset.tag === tag));
     if (shown) shown.textContent = n;
-    if (none) none.hidden = n > 0;
+    if (none) {
+      none.hidden = n > 0;
+      // Nothing in the chosen category: offer what the search finds in the others.
+      const title = cat ? (chips.find(b => b.dataset.cat === cat)?.firstChild.textContent.trim() || cat) : '';
+      none.innerHTML = cat && anywhere
+        ? `Nothing in ${title.replace(/[&<>]/g, '')} matches — <a href="#" data-code-allcats>show ${anywhere} match${anywhere === 1 ? '' : 'es'} in all categories</a>.`
+        : 'No projects match.';
+      const all = none.querySelector('[data-code-allcats]');
+      if (all) all.addEventListener('click', e => { e.preventDefault(); setHash(tag ? 'tag=' + encodeURIComponent(tag) : ''); });
+    }
     if (tagline) {
       tagline.hidden = !tag;
       tagline.querySelector('[data-code-tagname]').textContent = tag;

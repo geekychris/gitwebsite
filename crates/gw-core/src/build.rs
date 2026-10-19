@@ -603,6 +603,7 @@ pub fn build(site: &Site, opts: &BuildOptions) -> Result<BuildReport> {
 
     // The code catalog (code.yaml + static/code-logos/): /code/ and a page per project.
     let mut code_urls: Vec<String> = vec![];
+    let mut code_search: Vec<serde_json::Value> = vec![];
     if let Some(cat) = crate::codecat::Catalog::load(&site.root)? {
         let posts: Vec<crate::codecat::PostRef> = listed
             .iter()
@@ -621,6 +622,10 @@ pub fn build(site: &Site, opts: &BuildOptions) -> Result<BuildReport> {
                     c.insert("p", p);
                     write(&page_file(&p.url), tera.render("code_project.html", &c).with_context(|| format!("rendering code_project.html for {}", p.slug))?, &mut files)?;
                     code_urls.push(p.url.clone());
+                    code_search.push(serde_json::json!({
+                        "title": p.title, "url": p.url, "kind": "Code", "summary": p.summary,
+                        "areas": [p.category_title], "tags": p.tags, "text": p.search_text,
+                    }));
                 }
             }
         }
@@ -671,6 +676,7 @@ pub fn build(site: &Site, opts: &BuildOptions) -> Result<BuildReport> {
                 "date": v.date_iso, "areas": v.area_links.iter().map(|a| a.title.clone()).collect::<Vec<_>>(),
                 "tags": v.item.tags,
             }))
+            .chain(code_search)
             .collect();
         write("search.json", serde_json::to_string(&idx)?, &mut files)?;
         write("robots.txt", format!("User-agent: *\nAllow: /\nSitemap: {}/sitemap.xml\n", cfg.site.base_url.trim_end_matches('/')), &mut files)?;
