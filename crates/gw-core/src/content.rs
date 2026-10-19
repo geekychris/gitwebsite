@@ -9,6 +9,7 @@
 //! :project: workbench       // for updates: the project slug they belong to
 //! :summary: One line for cards and feeds.
 //! :hero: media:workbench-front   // or images/x.jpg, or https://...
+//! :hero-crop: 10, 20, 80, 45      // the part of the hero cards show (left, top, width, height in %)
 //! :status: draft            // draft | published
 //! :visibility: public       // public | unlisted
 //! :repo: https://github.com/octocat/thing
@@ -115,6 +116,11 @@ impl Item {
     pub fn listed(&self) -> bool {
         !self.draft && !self.unlisted
     }
+    /// `:hero-crop: left, top, width, height` — the part of the hero image (percentages of its
+    /// width and height) that cards show, chosen in the app's Tile image panel.
+    pub fn hero_crop(&self) -> Option<[f64; 4]> {
+        parse_crop(self.attrs.get("hero-crop")?)
+    }
 }
 
 /// Parse the document header: `= Title` then `:name: value` lines until the first blank line.
@@ -149,6 +155,14 @@ pub fn parse_header(text: &str) -> (Option<String>, BTreeMap<String, String>) {
 fn list(v: Option<&String>) -> Vec<String> {
     v.map(|s| s.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect())
         .unwrap_or_default()
+}
+
+/// `12.5, 8, 70, 39.4` (or with `%`) → left, top, width and height within the image, in percent.
+pub fn parse_crop(s: &str) -> Option<[f64; 4]> {
+    let v: Vec<f64> = s.split([',', ' ']).filter(|x| !x.is_empty()).map(|x| x.trim_end_matches('%').parse().ok()).collect::<Option<_>>()?;
+    let [x, y, w, h] = <[f64; 4]>::try_from(v).ok()?;
+    let ok = x >= 0.0 && y >= 0.0 && w > 0.5 && h > 0.5 && x + w <= 100.01 && y + h <= 100.01;
+    ok.then_some([x, y, w, h])
 }
 
 fn truthy(v: Option<&String>) -> bool {

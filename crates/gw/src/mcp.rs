@@ -21,7 +21,7 @@ const CONVENTIONS: &str = "Content is AsciiDoc. A file starts with `= Title` the
 (one per line, `:name: value`) until the first blank line: :type: (page|article|project|update|app|playground|tool), \
 :date: YYYY-MM-DD, :areas: comma-separated area paths or unique ids from list_areas (an item may sit in several), \
 :tags:, :project: <project slug> (for updates), :summary: one line for cards and feeds, :hero: media:<key> or \
-an image path/URL, :status: draft|published, :visibility: public|unlisted, :repo: URL, :url: (apps: where the app \
+an image path/URL, :hero-crop: left, top, width, height (percent of the hero image that 16:9 cards show), :status: draft|published, :visibility: public|unlisted, :repo: URL, :url: (apps: where the app \
 runs), :embed: true (apps: embed in an iframe), :source: <registry id>, :featured: true (home page Featured strip), :pinned: true or :pinned: <n> (pinned to the top of the home page, lowest n first; pinned, featured and latest never repeat each other). Images: \
 image::media:<key>[Alt text] for library media (add_media first), image::photo.jpg[] for files beside a bundle's \
 index.adoc, or image::https://...[] for external URLs; video::media:<key>[]; 3-D models: \

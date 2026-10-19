@@ -354,3 +354,19 @@ button.mic:hover, button.mic:focus-visible { opacity: 1; border-color: var(--lin
 button.link { border: 0; background: none; padding: 0; font: inherit; color: var(--accent); text-decoration: underline; cursor: pointer; }
 .code-review { border: 1px solid var(--accent); border-radius: 12px; padding: .8rem 1rem; margin: 1rem 0; background: color-mix(in srgb, var(--accent) 5%, transparent); }
 .code-review h2 { margin: 0 0 .3rem; font-size: 1.05rem; }
+
+/* Tile image panel (editor): the hero image with a 16:9 crop box, and card previews. */
+.tile-crop { display: flex; flex-wrap: wrap; gap: 1.2rem; margin: .6rem 0 1rem; padding: .8rem; border: 1px solid var(--line); border-radius: 12px; }
+.tc-stage-wrap { flex: 1 1 420px; min-width: 0; }
+.tc-stage { position: relative; display: inline-block; max-width: 100%; overflow: hidden; border-radius: 8px; user-select: none; touch-action: none; }
+.tc-stage img { display: block; max-width: 100%; max-height: 460px; }
+.tc-dim { position: absolute; background: rgba(0, 0, 0, .55); pointer-events: none; }
+.tc-box { position: absolute; outline: 2px solid #fff; cursor: move; }
+.tc-handle { position: absolute; right: -7px; bottom: -7px; width: 14px; height: 14px; background: #fff; border: 2px solid var(--accent); border-radius: 3px; cursor: nwse-resize; }
+.tc-previews { display: flex; flex-direction: column; gap: .8rem; flex: 0 0 300px; }
+.tc-previews .eyebrow { margin: 0 0 .3rem; font-size: .75rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.tc-card { width: 300px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--surface, #fff); }
+.tc-img { position: relative; overflow: hidden; aspect-ratio: 16 / 9; background: var(--wash); }
+.tc-img img { display: block; }
+.tc-body { padding: .6rem .8rem; }
+.tc-body p { margin: .2rem 0 0; color: var(--muted); font-size: .85rem; }

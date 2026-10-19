@@ -222,11 +222,13 @@ async function viewEditor(id) {
       <button data-release>${it.draft ? 'Release (publish at next deploy)' : 'Back to draft'}</button>
       <button data-refresh>Rebuild preview</button>
       <button data-models-toggle title="The 3-D models this post shows: add, caption, remove">3-D models</button>
+      <button data-crop-toggle title="How the hero image looks on the post's card, and which part of it the card shows">Tile image</button>
       <a class="btn" href="${esc(it.url)}" target="_blank" data-open>Open preview ↗</a>
       ${String(it.id).startsWith('ext:') ? '' : '<button data-enhance title="Rework this post with Claude: answer a few questions, Claude reads the code repository, and proposes a revision you review">✦ Enhance with Claude</button>'}
       <span class="grow"></span><span class="muted" data-dirty></span>
     </div>
     <div class="post-models" data-models hidden></div>
+    <div class="tile-crop" data-crop hidden></div>
     <div class="editor"><textarea spellcheck="false" data-src></textarea><iframe data-frame title="Preview"></iframe></div>`;
   const ta = $('[data-src]');
   ta.value = it.source_text;
@@ -260,6 +262,11 @@ async function viewEditor(id) {
     if (!panel.hidden) showModels();
   };
   if (sessionStorage.getItem('gw-editor-models') || /[?&]models\b/.test(location.hash)) { panel.hidden = false; showModels(); }
+  const cropPanel = $('[data-crop]');
+  $('[data-crop-toggle]').onclick = () => {
+    cropPanel.hidden = !cropPanel.hidden;
+    if (!cropPanel.hidden) renderTileCrop(cropPanel, it, ta, dirty);
+  };
   const enh = $('[data-enhance]');
   if (enh) enh.onclick = () => guard(async () => {
     if ($('[data-dirty]').textContent === 'Unsaved changes' && !(await ask('Unsaved changes', 'You have unsaved changes. Enhance the saved version anyway?', 'Enhance the saved version'))) return;
@@ -273,6 +280,150 @@ async function viewEditor(id) {
     viewEditor(id);
   });
   showPreview();
+}
+
+// ---------------------------------------------------------------- the hero image on cards
+// Cards show the hero image at 16:9, cropped to fill. The Tile image panel previews the card and
+// lets you drag a 16:9 box over the image; "Use this crop" writes `:hero-crop: left, top, width,
+// height` (percent of the image) into the header in the editor (Save writes it). The card's
+// inline styles are the same arithmetic as build.rs's crop_img_style.
+
+const TILE_ASPECT = 16 / 9;
+
+function headerAttr(text, name) {
+  for (const l of text.split('\n')) {
+    if (!l.trim()) break;
+    const m = /^:([\w-]+):\s*(.*)$/.exec(l);
+    if (m && m[1] === name) return m[2].trim();
+  }
+  return null;
+}
+
+/** The text with `:name: value` set in the header (after `after` if given), or removed (value null). */
+function setHeaderAttr(text, name, value, after) {
+  const lines = text.split('\n');
+  let end = lines.findIndex(l => !l.trim());
+  if (end < 0) end = lines.length;
+  const at = lines.slice(0, end).findIndex(l => l.startsWith(`:${name}:`));
+  if (value === null) { if (at >= 0) lines.splice(at, 1); return lines.join('\n'); }
+  const line = `:${name}: ${value}`;
+  if (at >= 0) lines[at] = line;
+  else {
+    const a = after ? lines.slice(0, end).findIndex(l => l.startsWith(`:${after}:`)) : -1;
+    lines.splice(a >= 0 ? a + 1 : end, 0, line);
+  }
+  return lines.join('\n');
+}
+
+function parseCrop(s) {
+  const v = String(s || '').split(/[\s,]+/).filter(Boolean).map(x => parseFloat(x));
+  if (v.length !== 4 || v.some(isNaN)) return null;
+  const [x, y, w, h] = v;
+  return x >= 0 && y >= 0 && w > 0.5 && h > 0.5 && x + w <= 100.01 && y + h <= 100.01 ? { x, y, w, h } : null;
+}
+
+/** The crop a card makes without :hero-crop: (centred, cover). */
+function defaultCrop(r) {
+  if (r > TILE_ASPECT) { const w = 100 * TILE_ASPECT / r; return { x: (100 - w) / 2, y: 0, w, h: 100 }; }
+  const h = 100 * r / TILE_ASPECT;
+  return { x: 0, y: (100 - h) / 2, w: 100, h };
+}
+
+function cropImgStyle(c) {
+  return `position:absolute;max-width:none;object-fit:cover;width:${10000 / c.w}%;height:${10000 / c.h}%;left:-${100 * c.x / c.w}%;top:-${100 * c.y / c.h}%`;
+}
+
+function renderTileCrop(panel, it, ta, dirty) {
+  const text = ta.value;
+  const hero = headerAttr(text, 'hero');
+  let src = it.hero_url || '';
+  let note = '';
+  if (hero && hero !== it.hero) {
+    if (/^(https?:|\/)/.test(hero)) src = hero;
+    else if (!hero.startsWith('media:')) src = it.url + hero;
+    else note = 'Save to load the new hero image.';
+  }
+  if (!hero || !src) {
+    panel.innerHTML = `<p class="muted">This post has no hero image (<span class="mono">:hero:</span> in the header), so its card has no picture.</p>`;
+    return;
+  }
+  const title = (/^=\s+(.*)$/m.exec(text) || [])[1] || it.title;
+  const summary = headerAttr(text, 'summary') || '';
+  const saved = parseCrop(headerAttr(text, 'hero-crop'));
+  panel.innerHTML = `
+    <div class="tc-stage-wrap">
+      <p class="muted small">Drag the box to choose what the card shows; drag its corner to resize. ${esc(note)}</p>
+      <div class="tc-stage" data-stage><img data-full src="${esc(src)}" alt="">${'<div class="tc-dim" data-dim></div>'.repeat(4)}<div class="tc-box" data-box><span class="tc-handle" data-handle></span></div></div>
+      <div class="bar">
+        <button class="primary" data-use>Use this crop</button>
+        <button data-reset title="The centred crop cards use by default">Centre</button>
+        <button data-remove ${saved ? '' : 'disabled'}>Remove the crop</button>
+        <span class="muted small mono" data-vals></span>
+      </div>
+    </div>
+    <div class="tc-previews">
+      <div><p class="eyebrow">Card with this crop</p>${tileCard(src, title, summary, 'data-after')}</div>
+      <div><p class="eyebrow">${saved ? 'Card now (saved crop)' : 'Card now (centred)'}</p>${tileCard(src, title, summary, 'data-before')}</div>
+    </div>`;
+  const img = $('[data-full]', panel), box = $('[data-box]', panel), stage = $('[data-stage]', panel);
+  let r = 0, c = null;
+  const show = () => {
+    Object.assign(box.style, { left: c.x + '%', top: c.y + '%', width: c.w + '%', height: c.h + '%' });
+    // Dim what the card leaves out: above, below, left and right of the box.
+    const [t, b, l, rr] = $$('[data-dim]', panel);
+    Object.assign(t.style, { left: 0, top: 0, width: '100%', height: c.y + '%' });
+    Object.assign(b.style, { left: 0, top: c.y + c.h + '%', width: '100%', height: 100 - c.y - c.h + '%' });
+    Object.assign(l.style, { left: 0, top: c.y + '%', width: c.x + '%', height: c.h + '%' });
+    Object.assign(rr.style, { left: c.x + c.w + '%', top: c.y + '%', width: 100 - c.x - c.w + '%', height: c.h + '%' });
+    $('[data-after] img', panel).setAttribute('style', cropImgStyle(c));
+    $('[data-vals]', panel).textContent = fmtCrop(c);
+  };
+  const fit = (x, y, w) => {
+    // Keep the box 16:9 on screen and inside the image.
+    w = Math.min(Math.max(w, 5), 100, 100 * TILE_ASPECT / r);
+    const h = w * r / TILE_ASPECT;
+    return { x: Math.min(Math.max(x, 0), 100 - w), y: Math.min(Math.max(y, 0), 100 - h), w, h };
+  };
+  const start = () => {
+    r = img.naturalWidth / img.naturalHeight;
+    c = saved ? fit(saved.x, saved.y, saved.w) : defaultCrop(r);
+    $('[data-before] img', panel).setAttribute('style', cropImgStyle(saved || defaultCrop(r)));
+    show();
+  };
+  if (img.complete && img.naturalWidth) start(); else img.onload = start;
+  const drag = (e, mode) => {
+    e.preventDefault(); e.stopPropagation();
+    const rect = stage.getBoundingClientRect();
+    const sx = e.clientX, sy = e.clientY, c0 = { ...c };
+    const move = ev => {
+      const dx = (ev.clientX - sx) / rect.width * 100, dy = (ev.clientY - sy) / rect.height * 100;
+      c = mode === 'move' ? fit(c0.x + dx, c0.y + dy, c0.w) : fit(c0.x, c0.y, Math.max(c0.w + dx, (c0.h + dy) * TILE_ASPECT / r));
+      show();
+    };
+    const up = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); };
+    addEventListener('pointermove', move); addEventListener('pointerup', up);
+  };
+  box.onpointerdown = e => drag(e, 'move');
+  $('[data-handle]', panel).onpointerdown = e => drag(e, 'size');
+  $('[data-reset]', panel).onclick = () => { c = defaultCrop(r); show(); };
+  $('[data-use]', panel).onclick = () => {
+    ta.value = setHeaderAttr(ta.value, 'hero-crop', fmtCrop(c), 'hero');
+    dirty();
+    toast('Crop set — Save to keep it');
+    renderTileCrop(panel, it, ta, dirty);
+  };
+  $('[data-remove]', panel).onclick = () => {
+    ta.value = setHeaderAttr(ta.value, 'hero-crop', null);
+    dirty();
+    renderTileCrop(panel, it, ta, dirty);
+  };
+}
+
+const fmtCrop = c => [c.x, c.y, c.w, c.h].map(v => +v.toFixed(2)).join(', ');
+
+function tileCard(src, title, summary, attr) {
+  return `<div class="tc-card" ${attr}><div class="tc-img"><img src="${esc(src)}" alt=""></div>
+    <div class="tc-body"><strong>${esc(title)}</strong>${summary ? `<p>${esc(summary)}</p>` : ''}</div></div>`;
 }
 
 // ---------------------------------------------------------------- 3-D models in a post

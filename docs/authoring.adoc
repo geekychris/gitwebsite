@@ -31,6 +31,7 @@ All content is AsciiDoc. A post is a header, a blank line, and the body.
 | `:project:` | For updates and project-related articles: the project's slug.
 | `:summary:` | One or two sentences for cards, the feed, search, and social previews.
 | `:hero:` | Lead image: `media:<key>`, a path inside a bundle (`photos/front.jpg`), or a URL.
+| `:hero-crop:` | The part of the hero image a card shows: `left, top, width, height` in percent of the image (e.g. `10, 20, 80, 45`). Cards are 16:9 and otherwise show the image's middle. Set it in the app: *Tile image* in the editor drags a 16:9 box over the image and previews the card.
 | `:status:` | `draft` (default for new items) or `published`.
 | `:visibility:` | `public` (default) or `unlisted`.
 | `:featured:` | Present (no value needed) to feature on the home page.

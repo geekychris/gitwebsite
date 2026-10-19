@@ -61,6 +61,10 @@ struct View {
     updated_human: String,
     area_links: Vec<AreaLink>,
     hero_url: String,
+    /// With `:hero-crop:`: inline styles for a card's image link and image, so the card shows that
+    /// part of the image (whatever the site's stylesheet).
+    hero_box_style: String,
+    hero_img_style: String,
     /// The hero image already appears in the body, so pages need not repeat it.
     hero_in_body: bool,
     reading_minutes: usize,
@@ -168,7 +172,8 @@ fn kind_label(k: Kind) -> &'static str {
     }
 }
 
-fn hero_url(it: &Item, media: &Library) -> String {
+/// Where an item's hero image is served from (a media key resolved; a bundle file under its URL).
+pub fn hero_url(it: &Item, media: &Library) -> String {
     let Some(h) = &it.hero else { return String::new() };
     if let Some(key) = h.strip_prefix("media:") {
         return media.resolve(key).map(|m| if m.thumb.is_empty() { m.url.clone() } else { m.url.clone() }).unwrap_or_default();
@@ -177,6 +182,17 @@ fn hero_url(it: &Item, media: &Library) -> String {
         return h.clone();
     }
     format!("{}{}", it.url, h)
+}
+
+/// The image scaled and shifted so the crop region fills its box: width 100/w %, height 100/h %,
+/// moved left by x/w and up by y/h of the box. (`object-fit: cover` absorbs a region whose shape
+/// is not quite the box's.)
+fn crop_img_style([x, y, w, h]: [f64; 4]) -> String {
+    let f = |v: f64| format!("{:.3}", v).trim_end_matches('0').trim_end_matches('.').to_string();
+    format!(
+        "position:absolute;max-width:none;aspect-ratio:auto;object-fit:cover;width:{}%;height:{}%;left:-{}%;top:-{}%",
+        f(10000.0 / w), f(10000.0 / h), f(100.0 * x / w), f(100.0 * y / h)
+    )
 }
 
 fn strip_tags(html: &str) -> String {
@@ -326,6 +342,7 @@ pub fn build(site: &Site, opts: &BuildOptions) -> Result<BuildReport> {
             .map(|p| (p.title.clone(), p.url.clone()))
             .unwrap_or_default();
         let hero = hero_url(it, &media);
+        let crop = if hero.is_empty() { None } else { it.hero_crop() };
         let hero_in_body = !hero.is_empty() && (body.contains(hero.rsplit('/').next().unwrap_or(&hero)) || shows_gallery.contains(&it.id));
         View {
             item: it.clone(),
@@ -334,6 +351,8 @@ pub fn build(site: &Site, opts: &BuildOptions) -> Result<BuildReport> {
             date_iso: it.date.map(|d| d.to_string()).unwrap_or_default(),
             updated_human: human(it.updated),
             area_links,
+            hero_box_style: crop.map(|_| "position:relative;overflow:hidden;display:block;aspect-ratio:16/9".to_string()).unwrap_or_default(),
+            hero_img_style: crop.map(crop_img_style).unwrap_or_default(),
             hero_url: hero,
             hero_in_body,
             reading_minutes: (words / 220).max(1),

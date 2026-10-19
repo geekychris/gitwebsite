@@ -105,6 +105,9 @@ impl Site {
                     problems.push(format!("{}: unknown area {a:?}", it.id));
                 }
             }
+            if it.attrs.contains_key("hero-crop") && it.hero_crop().is_none() {
+                problems.push(format!("{}: :hero-crop: wants left, top, width, height in percent of the image (e.g. 10, 20, 80, 45)", it.id));
+            }
             if let Some(p) = &it.project {
                 if !projects.contains(&p.as_str()) {
                     problems.push(format!("{}: project {p:?} does not exist", it.id));
