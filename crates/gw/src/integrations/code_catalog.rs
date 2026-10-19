@@ -91,10 +91,27 @@ fn gh_json(args: &[&str]) -> Result<Value> {
     serde_json::from_slice(&out).context("gh: not JSON")
 }
 
-/// `gh api -X <method> <path> --input -` with a JSON body.
+/// `gh api -X <method> <path> --input -` with a JSON body. GitHub limits how fast an account
+/// may write (its "secondary rate limit", about 80 writes a minute and 500 an hour); a write
+/// refused for that waits a minute and tries again, for up to an hour.
 fn gh_send(method: &str, path: &str, body: &Value) -> Result<Value> {
-    let out = gh_raw(&["api", "-X", method, path, "--input", "-"], Some(body.to_string().as_bytes()))?;
-    Ok(serde_json::from_slice(&out).unwrap_or(Value::Null))
+    let mut tries = 0;
+    loop {
+        match gh_raw(&["api", "-X", method, path, "--input", "-"], Some(body.to_string().as_bytes())) {
+            Ok(out) => return Ok(serde_json::from_slice(&out).unwrap_or(Value::Null)),
+            Err(e) if tries < 60 && is_rate_limited(&format!("{e:#}")) => {
+                tries += 1;
+                eprintln!("GitHub rate limit; waiting a minute ({tries})");
+                std::thread::sleep(std::time::Duration::from_secs(60));
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+fn is_rate_limited(err: &str) -> bool {
+    let e = err.to_ascii_lowercase();
+    e.contains("secondary rate limit") || e.contains("rate limit exceeded") || e.contains("abuse")
 }
 
 /// A GET that may 404: `None` then.
@@ -1036,7 +1053,7 @@ fn relative(from_dir: &str, to: &str) -> String {
 
 /// Open a pull request on the project's repository that adds its imported logo (as
 /// `assets/logo.<ext>`) and shows it at the top of the README.
-pub fn logo_pr(site: &Site, slug: &str, log: &dyn Fn(String)) -> Result<Value> {
+pub fn logo_pr(site: &Site, slug: &str, merge: bool, log: &dyn Fn(String)) -> Result<Value> {
     let c = load(site)?;
     let p = c.get(slug).with_context(|| format!("no project {slug}"))?.clone();
     let (file, from_family) = c.logo_of(&p).map(|(f, fam)| (f.to_string(), fam)).with_context(|| format!("{slug} has no logo yet"))?;
@@ -1103,6 +1120,25 @@ pub fn logo_pr(site: &Site, slug: &str, log: &dyn Fn(String)) -> Result<Value> {
     }))?;
     let url = pr["html_url"].as_str().context("GitHub did not return the pull request")?.to_string();
     log(format!("{repo}: {url}"));
+    // Merging (squash) is optional; a PR that can't be merged stays open and is still recorded.
+    let merged = if merge {
+        let n = pr["number"].as_u64().context("GitHub did not return the PR number")?;
+        match gh_send("PUT", &format!("repos/{repo}/pulls/{n}/merge"), &json!({ "merge_method": "squash", "commit_title": format!("Add a project logo (#{n})") })) {
+            Ok(_) => {
+                log(format!("{repo}: merged"));
+                if let Err(e) = gh_raw(&["api", "-X", "DELETE", &format!("repos/{repo}/git/refs/heads/{}", enc_path(&head))], None) {
+                    log(format!("{repo}: couldn't delete {head}: {e:#}"));
+                }
+                true
+            }
+            Err(e) => {
+                log(format!("{repo}: not merged: {e:#}"));
+                false
+            }
+        }
+    } else {
+        false
+    };
     modify(site, |c| {
         if let Some(x) = c.get_mut(slug) {
             x.logo_pr = url.clone();
@@ -1110,7 +1146,7 @@ pub fn logo_pr(site: &Site, slug: &str, log: &dyn Fn(String)) -> Result<Value> {
         }
         Ok(())
     })?;
-    Ok(json!({ "slug": slug, "pr": url, "branch": head, "logo_path": logo_path, "readme": readme_path }))
+    Ok(json!({ "slug": slug, "pr": url, "merged": merged, "branch": head, "logo_path": logo_path, "readme": readme_path }))
 }
 
 /// Projects whose imported logo has no PR yet.
@@ -1118,10 +1154,11 @@ pub fn awaiting_pr(site: &Site) -> Result<Vec<String>> {
     Ok(pr_candidates(&load(site)?))
 }
 
-pub fn logo_prs(site: &Site, slugs: &[String], log: &dyn Fn(String)) -> Result<Value> {
+pub fn logo_prs(site: &Site, slugs: &[String], merge: bool, log: &dyn Fn(String)) -> Result<Value> {
     let (mut ok, mut failed) = (vec![], vec![]);
-    for s in slugs {
-        match logo_pr(site, s, log) {
+    for (i, s) in slugs.iter().enumerate() {
+        log(format!("[{}/{}] {s}", i + 1, slugs.len()));
+        match logo_pr(site, s, merge, log) {
             Ok(v) => ok.push(v),
             Err(e) => {
                 log(format!("{s}: {e:#}"));
@@ -1377,11 +1414,11 @@ pub fn start_enhance(site: &Site, slug: &str) -> Result<Value> {
 pub fn start_suggest(site: &Site) -> Result<Value> {
     start_job(site, "suggest", "categories", move |s, log| suggest(s, log))
 }
-pub fn start_logo_prs(site: &Site, slugs: Vec<String>) -> Result<Value> {
+pub fn start_logo_prs(site: &Site, slugs: Vec<String>, merge: bool) -> Result<Value> {
     if slugs.is_empty() {
         bail!("no logos waiting for a pull request");
     }
-    start_job(site, "logo-pr", &format!("{} repositories", slugs.len()), move |s, log| logo_prs(s, &slugs, log))
+    start_job(site, "logo-pr", &format!("{} repositories", slugs.len()), move |s, log| logo_prs(s, &slugs, merge, log))
 }
 
 // ------------------------------------------------------------------ CLI
@@ -1499,7 +1536,6 @@ pub enum CodeCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Import rendered logos: image files (or folders of them) named <slug>.png.
     /// Import rendered logos: from the pickup folder (default), or image files, folders or zips.
     /// Named <slug>.png / family-<id>.png they match by name; --batch N matches the rest by the
     /// order they were saved against that batch's prompt file.
@@ -1514,6 +1550,9 @@ pub enum CodeCmd {
         slugs: Vec<String>,
         #[arg(long)]
         all: bool,
+        /// Also merge each pull request (squash) and delete its branch.
+        #[arg(long)]
+        merge: bool,
         /// Required: you have checked the logos and want the pull requests opened.
         #[arg(long)]
         yes: bool,
@@ -1593,7 +1632,7 @@ pub fn run_cli(site: &Site, c: CodeCmd) -> Result<Value> {
             Ok(Value::Null)
         }
         CodeCmd::ImportLogos { paths, batch } => import_logos(site, &paths, batch),
-        CodeCmd::LogoPr { slugs, all, yes } => {
+        CodeCmd::LogoPr { slugs, all, merge, yes } => {
             let slugs = if all { awaiting_pr(site)? } else { slugs };
             if slugs.is_empty() {
                 bail!("name projects, or --all");
@@ -1601,7 +1640,7 @@ pub fn run_cli(site: &Site, c: CodeCmd) -> Result<Value> {
             if !yes {
                 bail!("this opens a pull request on {} repositor{} ({}); check the logos, then run again with --yes", slugs.len(), if slugs.len() == 1 { "y" } else { "ies" }, slugs.join(", "));
             }
-            logo_prs(site, &slugs, &print)
+            logo_prs(site, &slugs, merge, &print)
         }
     }
 }

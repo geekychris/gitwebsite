@@ -367,7 +367,8 @@ An improved project gets Claude's logo idea in its prompt; you can write your ow
    a 256 px copy; a 512 px copy is kept in `.gw-cache/code-logos/` for the repository.
 3. *Open N pull requests…* (after you confirm) adds each imported logo to its repository as
    `assets/logo.png` and centres it at the top of the README, on a branch `gitwebsite/add-logo`,
-   and opens a pull request for you to merge. `gw code logo-pr --all --yes`.
+   and opens a pull request for you to merge. `gw code logo-pr --all --yes`; add `--merge` to
+   squash-merge each one and delete its branch (writes wait out GitHub's rate limit).
 
 *Logo families*: projects that should share one mark — the modules of a framework — form a
 family (*Categories & tags → Logo families*, or `gw code family hitorro --title HiTorro --concept
@@ -381,7 +382,7 @@ their progress. REST: `GET /api/code`, `PUT /api/code` (settings, categories),
 `GET|PUT /api/code/projects/<slug>`, `POST /api/code/sync`, `POST /api/code/projects/<slug>/enhance`,
 `POST /api/code/suggest`, `POST /api/code/scheme`, `POST /api/code/family`, `GET /api/code/job`,
 `GET /api/code/logo-prompts?size=15`, `POST /api/code/logo-prompts/write {size}`, `POST /api/code/logos/upload?name=…[&slug=…]` (the image as
-the body), `POST /api/code/logos/import {paths?, batch?}`, `POST /api/code/logo-prs {slugs | all, confirm: true}`,
+the body), `POST /api/code/logos/import {paths?, batch?}`, `POST /api/code/logo-prs {slugs | all, merge?, confirm: true}`,
 `GET /api/code/logo/<file>`. MCP: `code_list`, `code_get` (with the README, for writing),
 `code_update`, `code_category`, `code_family`, `code_apply_scheme`, `code_sync`, `code_logo_prompts`, `code_import_logos`, `code_logo_pr`.
 

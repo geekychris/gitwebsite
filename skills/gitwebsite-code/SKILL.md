@@ -47,7 +47,8 @@ replaces). By hand: `gw code category <id> --title … --description …`, `gw c
    if two are swapped, re-import the right file for a project with `gw code import-logos <file>`
    after renaming it `<slug>.png`.
 3. Adding logos to the repositories opens pull requests on the user's GitHub — **ask first**, list
-   the repositories, then `gw code logo-pr --all --yes` [`code_logo_pr` with `confirm: true`].
+   the repositories, then `gw code logo-pr --all --yes` [`code_logo_pr` with `confirm: true`];
+   `--merge` [`merge: true`] also merges them, when the user has asked for that.
 
 Publishing the site (so /code/ changes go live) is the gitwebsite-publish skill — always with the
 user's confirmation. Put `{ label: Code, href: /code/ }` in `nav:` in site.yaml for the menu.

@@ -256,8 +256,8 @@ fn tools() -> Value {
             "write": {"type": "boolean", "description": "Also write every batch into the pickup folder's prompts/ (batch-NN.txt to paste, batch-NN.json with the order)"}}), &[])},
         {"name": "code_import_logos", "description": "Import rendered logos — by default everything in the pickup folder (images and zips): images named as the prompts asked (<slug>.png, family-<id>.png) match by name; with batch=N, images whose names match nothing are matched to that batch's missing logos in the order they were saved (only if the counts agree). Look at the images (they are moved to imported/) to check order matches before telling the user.",
          "inputSchema": s(json!({"paths": arr("Files or folders (default: the pickup folder)"), "batch": {"type": "integer", "description": "Batch number, to match unnamed images by order"}}), &[])},
-        {"name": "code_logo_pr", "description": "Open a pull request on a project's GitHub repository adding its imported logo (assets/logo.png) at the top of its README. This WRITES TO THE USER'S REPOSITORIES: list what you will do and get explicit confirmation, then pass confirm=true.",
-         "inputSchema": s(json!({"slugs": arr("Project slugs"), "all": {"type": "boolean", "description": "Every imported logo without a PR"}, "confirm": {"type": "boolean"}}), &["confirm"])},
+        {"name": "code_logo_pr", "description": "Open a pull request on a project's GitHub repository adding its imported logo (assets/logo.png) at the top of its README, and with merge=true merge it. This WRITES TO THE USER'S REPOSITORIES: list what you will do and get explicit confirmation, then pass confirm=true.",
+         "inputSchema": s(json!({"slugs": arr("Project slugs"), "all": {"type": "boolean", "description": "Every imported logo without a PR"}, "merge": {"type": "boolean", "description": "Also squash-merge each PR and delete its branch"}, "confirm": {"type": "boolean"}}), &["confirm"])},
     ])
 }
 
@@ -364,7 +364,7 @@ fn call(root: &PathBuf, name: &str, a: &Value) -> Result<Value> {
                     if slugs.is_empty() {
                         bail!("name slugs, or all=true");
                     }
-                    cc::logo_prs(&site, &slugs, &|l| eprintln!("{l}"))
+                    cc::logo_prs(&site, &slugs, a.get("merge").and_then(|v| v.as_bool()) == Some(true), &|l| eprintln!("{l}"))
                 }
             }
         }

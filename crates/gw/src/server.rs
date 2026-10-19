@@ -531,16 +531,19 @@ mod code_api {
         #[serde(default)]
         all: bool,
         #[serde(default)]
+        merge: bool,
+        #[serde(default)]
         confirm: bool,
     }
-    /// POST /api/code/logo-prs {slugs | all, confirm: true} — opens pull requests (a job).
+    /// POST /api/code/logo-prs {slugs | all, merge?, confirm: true} — opens pull requests, and
+    /// with merge squash-merges them (a job).
     pub async fn logo_prs(State(st): State<AppState>, Json(b): Json<PrBody>) -> ApiResult {
         if !b.confirm {
             return Err(ApiError::bad("opening pull requests needs confirm: true"));
         }
         with_site(&st, move |s| {
             let slugs = if b.all { cc::awaiting_pr(s)? } else { b.slugs };
-            cc::start_logo_prs(s, slugs)
+            cc::start_logo_prs(s, slugs, b.merge)
         })
         .await
     }
