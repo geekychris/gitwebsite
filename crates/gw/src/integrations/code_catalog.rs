@@ -852,30 +852,181 @@ fn import_family_logo(site: &Site, id: &str, name: &str, bytes: &[u8]) -> Result
     Ok(json!({ "slug": stem, "family": id, "members": members, "file": format!("{stem}.{ext}"), "from": name }))
 }
 
-/// Import every image in the given files and folders (not recursive).
-pub fn import_logos(site: &Site, paths: &[PathBuf]) -> Result<Value> {
+/// The pickup folder for rendered logos (code.yaml `logo_inbox`, default ~/Pictures/gitwebsite-logos).
+pub fn inbox(site: &Site) -> Result<PathBuf> {
+    let c = load(site)?;
+    Ok(gw_core::config::expand_home(if c.logo_inbox.trim().is_empty() { codecat::DEFAULT_INBOX } else { c.logo_inbox.trim() }))
+}
+
+const INBOX_README: &str = "Rendered logos for the gitwebsite code catalog.\n\n\
+prompts/batch-NN.txt  paste one into ChatGPT; it names the file for each image\n\
+prompts/batch-NN.json the same batch as data (the order, for images saved without their names)\n\n\
+Save the images here (or ChatGPT's zip of a batch). Then import: the app's Code > Logos page\n\
+(Import from the pickup folder), `gw code import-logos`, or ask Claude. Images named as asked are\n\
+matched by name; others by the order they were saved, with --batch N. Imported files move to imported/.\n";
+
+/// Write every batch of prompts into the pickup folder's `prompts/` (replacing earlier ones): a
+/// `.txt` to paste into ChatGPT and a `.json` with the order and file names.
+pub fn write_prompt_files(site: &Site, size: usize) -> Result<Value> {
+    let c = load(site)?;
+    let dir = inbox(site)?;
+    let pdir = dir.join("prompts");
+    std::fs::create_dir_all(&pdir)?;
+    std::fs::write(dir.join("README.txt"), INBOX_README)?;
+    for e in std::fs::read_dir(&pdir)?.flatten() {
+        let n = e.file_name().to_string_lossy().to_string();
+        if n.starts_with("batch-") && (n.ends_with(".txt") || n.ends_with(".json")) {
+            std::fs::remove_file(e.path())?;
+        }
+    }
+    let batches = codecat::logo_batches(&c, size);
     let mut files = vec![];
-    for p in paths.iter().map(|p| gw_core::config::expand_home(&p.to_string_lossy())) {
-        if p.is_dir() {
-            for e in std::fs::read_dir(p)?.flatten() {
-                if e.path().is_file() && is_image_path(&e.file_name().to_string_lossy()) {
-                    files.push(e.path());
+    for (i, b) in batches.iter().enumerate() {
+        let n = i + 1;
+        std::fs::write(pdir.join(format!("batch-{n:02}.txt")), codecat::batch_text(b, n, batches.len()))?;
+        std::fs::write(pdir.join(format!("batch-{n:02}.json")), serde_json::to_string_pretty(&json!({ "batch": n, "of": batches.len(), "written": today(), "items": b }))?)?;
+        files.push(format!("batch-{n:02}.txt"));
+    }
+    Ok(json!({ "inbox": dir.display().to_string(), "prompts": pdir.display().to_string(), "batches": batches.len(), "logos": batches.iter().map(|b| b.len()).sum::<usize>(), "files": files }))
+}
+
+/// Images in a folder (top level), and the images inside any zip files there (unpacked with
+/// ditto into `.unzipped/`). Returns (image, the file to move away when done).
+fn collect_images(dir: &Path) -> Result<Vec<(PathBuf, PathBuf)>> {
+    let mut out = vec![];
+    for e in std::fs::read_dir(dir)?.flatten() {
+        let p = e.path();
+        let name = e.file_name().to_string_lossy().to_string();
+        if !p.is_file() || name.starts_with('.') {
+            continue;
+        }
+        if is_image_path(&name) {
+            out.push((p.clone(), p));
+        } else if name.to_ascii_lowercase().ends_with(".zip") {
+            let to = dir.join(".unzipped").join(name.trim_end_matches(".zip"));
+            let _ = std::fs::remove_dir_all(&to);
+            std::fs::create_dir_all(&to)?;
+            let ok = Command::new("/usr/bin/ditto").args(["-x", "-k"]).arg(&p).arg(&to).status().map(|s| s.success()).unwrap_or(false);
+            if !ok {
+                continue;
+            }
+            for f in walkdir::WalkDir::new(&to).into_iter().flatten().filter(|f| f.file_type().is_file()) {
+                let n = f.file_name().to_string_lossy().to_string();
+                if is_image_path(&n) && !n.starts_with('.') && !f.path().components().any(|c| c.as_os_str() == "__MACOSX") {
+                    out.push((f.path().to_path_buf(), p.clone()));
                 }
             }
+        }
+    }
+    Ok(out)
+}
+
+fn mtime(p: &Path) -> std::time::SystemTime {
+    std::fs::metadata(p).and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH)
+}
+
+/// Import rendered logos from files and folders — by default the pickup folder. Images named as
+/// the prompts asked are matched by name. With `batch`, images whose names match nothing are
+/// matched to that batch's logos still missing, in the order they were saved (oldest first) —
+/// only when the counts agree. Imported files (and zips) in the pickup folder move to `imported/`.
+pub fn import_logos(site: &Site, paths: &[PathBuf], batch: Option<usize>) -> Result<Value> {
+    let inbox_dir = inbox(site)?;
+    let paths: Vec<PathBuf> = if paths.is_empty() { vec![inbox_dir.clone()] } else { paths.iter().map(|p| gw_core::config::expand_home(&p.to_string_lossy())).collect() };
+    let mut files: Vec<(PathBuf, PathBuf)> = vec![];
+    for p in &paths {
+        if p.is_dir() {
+            files.extend(collect_images(p)?);
+        } else if p.is_file() {
+            files.push((p.clone(), p.clone()));
         } else {
-            files.push(p);
+            bail!("{} is not there", p.display());
         }
     }
-    files.sort();
+    files.sort_by_key(|(f, _)| (mtime(f), f.clone()));
     let (mut imported, mut unmatched) = (vec![], vec![]);
-    for f in files {
-        let name = f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let mut done_sources: BTreeSet<PathBuf> = BTreeSet::new();
+    let mut failed_sources: BTreeSet<PathBuf> = BTreeSet::new();
+    let mut by_order: Vec<(PathBuf, PathBuf)> = vec![];
+    let name_of = |f: &Path| f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    for (f, src) in files {
+        let name = name_of(&f);
+        let c = load(site)?;
+        if codecat::match_family_file(&c, &name).is_none() && codecat::match_logo_file(&c, &name).is_none() {
+            by_order.push((f, src));
+            continue;
+        }
         match std::fs::read(&f).map_err(anyhow::Error::from).and_then(|b| import_logo(site, None, &name, &b)) {
-            Ok(v) => imported.push(v),
-            Err(e) => unmatched.push(json!({ "file": f.display().to_string(), "error": format!("{e:#}") })),
+            Ok(mut v) => {
+                v["by"] = json!("name");
+                imported.push(v);
+                done_sources.insert(src);
+            }
+            Err(e) => {
+                unmatched.push(json!({ "file": f.display().to_string(), "error": format!("{e:#}") }));
+                failed_sources.insert(src);
+            }
         }
     }
-    Ok(json!({ "imported": imported, "unmatched": unmatched }))
+    let mut note = String::new();
+    if !by_order.is_empty() {
+        match batch {
+            None => {
+                for (f, src) in by_order.drain(..) {
+                    unmatched.push(json!({ "file": f.display().to_string(), "error": "the name matches no project (pass the batch number to match by order)" }));
+                    failed_sources.insert(src);
+                }
+            }
+            Some(n) => {
+                let man = inbox_dir.join("prompts").join(format!("batch-{n:02}.json"));
+                let m: Value = serde_json::from_str(&std::fs::read_to_string(&man).with_context(|| format!("no {} — write the prompt files first", man.display()))?)?;
+                let items: Vec<codecat::PromptItem> = serde_json::from_value(m["items"].clone())?;
+                let c = load(site)?;
+                let open: Vec<&codecat::PromptItem> = items
+                    .iter()
+                    .filter(|i| match i.slug.strip_prefix("family-") {
+                        Some(id) => c.family(id).is_some_and(|f| f.logo.is_empty()),
+                        None => c.get(&i.slug).is_some_and(|p| p.logo.is_empty()),
+                    })
+                    .collect();
+                if open.len() != by_order.len() {
+                    note = format!("batch {n} still needs {} logos but {} images have names that match nothing — nothing was matched by order; rename them (or remove extras) and try again", open.len(), by_order.len());
+                    for (f, src) in by_order.drain(..) {
+                        unmatched.push(json!({ "file": f.display().to_string(), "error": "not matched" }));
+                        failed_sources.insert(src);
+                    }
+                } else {
+                    for ((f, src), it) in by_order.drain(..).zip(open) {
+                        match std::fs::read(&f).map_err(anyhow::Error::from).and_then(|b| import_logo(site, Some(&it.slug), &name_of(&f), &b)) {
+                            Ok(mut v) => {
+                                v["by"] = json!("order");
+                                v["for"] = json!(it.title);
+                                imported.push(v);
+                                done_sources.insert(src);
+                            }
+                            Err(e) => {
+                                unmatched.push(json!({ "file": f.display().to_string(), "error": format!("{e:#}") }));
+                                failed_sources.insert(src);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // Move what was imported out of the pickup folder (a zip only when all of it went in).
+    let done = inbox_dir.join("imported");
+    for src in done_sources.difference(&failed_sources) {
+        if src.parent() == Some(inbox_dir.as_path()) {
+            std::fs::create_dir_all(&done)?;
+            let mut to = done.join(name_of(src));
+            if to.exists() {
+                to = done.join(format!("{}-{}", chrono::Local::now().format("%Y%m%d%H%M%S"), name_of(src)));
+            }
+            std::fs::rename(src, &to)?;
+        }
+    }
+    let _ = std::fs::remove_dir_all(inbox_dir.join(".unzipped"));
+    Ok(json!({ "inbox": inbox_dir.display().to_string(), "imported": imported, "unmatched": unmatched, "note": note }))
 }
 
 fn relative(from_dir: &str, to: &str) -> String {
@@ -1336,8 +1487,11 @@ pub enum CodeCmd {
     /// Image prompts for the logos still missing, in batches to paste into ChatGPT.
     LogoPrompts {
         /// Logos per batch.
-        #[arg(long, default_value_t = 10)]
+        #[arg(long, default_value_t = 15)]
         size: usize,
+        /// Write every batch into the pickup folder's prompts/ (batch-NN.txt and .json).
+        #[arg(long)]
+        write: bool,
         /// Only this batch (1-based).
         #[arg(long)]
         batch: Option<usize>,
@@ -1346,7 +1500,14 @@ pub enum CodeCmd {
         json: bool,
     },
     /// Import rendered logos: image files (or folders of them) named <slug>.png.
-    ImportLogos { paths: Vec<PathBuf> },
+    /// Import rendered logos: from the pickup folder (default), or image files, folders or zips.
+    /// Named <slug>.png / family-<id>.png they match by name; --batch N matches the rest by the
+    /// order they were saved against that batch's prompt file.
+    ImportLogos {
+        paths: Vec<PathBuf>,
+        #[arg(long)]
+        batch: Option<usize>,
+    },
     /// Open a pull request on each repository adding its imported logo (assets/logo.png) to the
     /// top of its README. Give slugs, or --all for every imported logo without a PR.
     LogoPr {
@@ -1414,7 +1575,10 @@ pub fn run_cli(site: &Site, c: CodeCmd) -> Result<Value> {
             let r = apply_scheme(site, &s)?;
             Ok(json!({ "applied": r["applied"], "categories": r["categories"] }))
         }
-        CodeCmd::LogoPrompts { size, batch, json: as_json } => {
+        CodeCmd::LogoPrompts { size, batch, json: as_json, write } => {
+            if write {
+                return write_prompt_files(site, size);
+            }
             let v = logo_prompts(site, size)?;
             let batches: Vec<Value> = v["batches"].as_array().cloned().unwrap_or_default().into_iter().filter(|b| batch.is_none_or(|n| b["number"] == n)).collect();
             if as_json {
@@ -1428,7 +1592,7 @@ pub fn run_cli(site: &Site, c: CodeCmd) -> Result<Value> {
             }
             Ok(Value::Null)
         }
-        CodeCmd::ImportLogos { paths } => import_logos(site, &paths),
+        CodeCmd::ImportLogos { paths, batch } => import_logos(site, &paths, batch),
         CodeCmd::LogoPr { slugs, all, yes } => {
             let slugs = if all { awaiting_pr(site)? } else { slugs };
             if slugs.is_empty() {
@@ -1542,6 +1706,55 @@ mod tests {
         assert!(load(&site).unwrap().projects.iter().all(|p| p.family.is_empty()));
     }
 
+    fn png_bytes(rgb: [u8; 3]) -> Vec<u8> {
+        let img = image::RgbaImage::from_pixel(64, 64, image::Rgba([rgb[0], rgb[1], rgb[2], 255]));
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(img).write_to(&mut png, image::ImageFormat::Png).unwrap();
+        png.into_inner()
+    }
+
+    #[test]
+    fn pickup_folder_by_name_order_and_zip() {
+        let site = site_with("projects:\n  - { slug: a, repo: me/a }\n  - { slug: b, repo: me/b }\n  - { slug: c, repo: me/c }\n  - { slug: d, repo: me/d }\n");
+        let inbox_dir = site.root.join("inbox");
+        modify(&site, |c| { c.logo_inbox = inbox_dir.display().to_string(); Ok(()) }).unwrap();
+        let w = write_prompt_files(&site, 3).unwrap();
+        assert_eq!((w["batches"].as_u64(), w["logos"].as_u64()), (Some(2), Some(4)));
+        let t = std::fs::read_to_string(inbox_dir.join("prompts/batch-01.txt")).unwrap();
+        assert!(t.contains("1. FILE NAME: a.png") && t.contains("3. FILE NAME: c.png") && t.contains("logos-batch-01.zip"));
+        assert!(inbox_dir.join("prompts/batch-01.json").is_file() && inbox_dir.join("README.txt").is_file());
+        // Batch 1: one saved under its name, two as ChatGPT names them (saved in order).
+        std::fs::write(inbox_dir.join("b.png"), png_bytes([0, 0, 255])).unwrap();
+        std::fs::write(inbox_dir.join("ChatGPT Image 10_01.png"), png_bytes([255, 0, 0])).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        std::fs::write(inbox_dir.join("ChatGPT Image 09_59.png"), png_bytes([0, 255, 0])).unwrap();
+        let r = import_logos(&site, &[], None).unwrap();
+        assert_eq!(r["imported"].as_array().unwrap().len(), 1, "without a batch only names match");
+        assert_eq!(r["unmatched"].as_array().unwrap().len(), 2);
+        assert!(inbox_dir.join("imported/b.png").is_file() && !inbox_dir.join("b.png").exists());
+        let r = import_logos(&site, &[], Some(1)).unwrap();
+        let got: Vec<(String, String)> = r["imported"].as_array().unwrap().iter().map(|v| (v["slug"].as_str().unwrap().into(), v["from"].as_str().unwrap().into())).collect();
+        assert_eq!(got, [("a".to_string(), "ChatGPT Image 10_01.png".to_string()), ("c".to_string(), "ChatGPT Image 09_59.png".to_string())], "by the order saved, skipping b");
+        assert!(std::fs::read_dir(&inbox_dir).unwrap().flatten().all(|e| e.path().is_dir() || e.file_name() == "README.txt"));
+        // Counts that disagree match nothing.
+        std::fs::write(inbox_dir.join("x1.png"), png_bytes([1, 1, 1])).unwrap();
+        std::fs::write(inbox_dir.join("x2.png"), png_bytes([2, 2, 2])).unwrap();
+        let r = import_logos(&site, &[], Some(2)).unwrap();
+        assert!(r["imported"].as_array().unwrap().is_empty() && r["note"].as_str().unwrap().contains("still needs 1"));
+        std::fs::remove_file(inbox_dir.join("x2.png")).unwrap();
+        std::fs::remove_file(inbox_dir.join("x1.png")).unwrap();
+        // ChatGPT's zip of a batch.
+        if std::path::Path::new("/usr/bin/zip").exists() {
+            let z = site.root.join("z");
+            std::fs::create_dir_all(&z).unwrap();
+            std::fs::write(z.join("d.png"), png_bytes([9, 9, 9])).unwrap();
+            assert!(Command::new("/usr/bin/zip").current_dir(&z).args(["-q", "../inbox/logos-batch-02.zip", "d.png"]).status().unwrap().success());
+            let r = import_logos(&site, &[], None).unwrap();
+            assert_eq!(r["imported"][0]["slug"], "d");
+            assert!(inbox_dir.join("imported/logos-batch-02.zip").is_file() && !inbox_dir.join(".unzipped").exists());
+        }
+    }
+
     #[test]
     fn importing_logos() {
         let site = site_with("projects:\n  - { slug: amiga-mcp, repo: me/amiga_mcp }\n");
@@ -1552,7 +1765,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("Amiga_MCP (1).png"), png.get_ref()).unwrap();
         std::fs::write(dir.join("other.png"), png.get_ref()).unwrap();
-        let r = import_logos(&site, &[dir]).unwrap();
+        let r = import_logos(&site, &[dir], None).unwrap();
         assert_eq!(r["imported"].as_array().unwrap().len(), 1);
         assert_eq!(r["unmatched"].as_array().unwrap().len(), 1);
         let p = load(&site).unwrap().get("amiga-mcp").unwrap().clone();

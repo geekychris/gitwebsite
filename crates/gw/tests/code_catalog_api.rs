@@ -73,5 +73,5 @@ async fn edit_categorise_and_import_a_logo_over_http() {
     // The prompts skip the project that has a logo now.
     let v: Value = c.get(api("/code/logo-prompts?size=5")).send().await.unwrap().json().await.unwrap();
     assert_eq!(v["count"], 1);
-    assert!(v["batches"][0]["text"].as_str().unwrap().contains("File name: other.png"));
+    assert!(v["batches"][0]["text"].as_str().unwrap().contains("FILE NAME: other.png"));
 }

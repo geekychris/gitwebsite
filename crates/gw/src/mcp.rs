@@ -252,7 +252,10 @@ fn tools() -> Value {
         {"name": "code_sync", "description": "Read the owner's repositories from GitHub (gh CLI) into the code catalog: new public repositories are added (forks and archived ones hidden), facts refreshed, and logos found in READMEs copied into the site. Takes a minute or more.",
          "inputSchema": s(json!({"logos": {"type": "boolean", "description": "Look for logos (default true)"}}), &[])},
         {"name": "code_logo_prompts", "description": "Image prompts for the code-catalog logos still missing, in numbered batches (text to paste into ChatGPT; each item names the file to save the image as, <slug>.png). The user imports the images in the app's Code page or with `gw code import-logos`.",
-         "inputSchema": s(json!({"size": {"type": "integer", "description": "Logos per batch (default 10)"}}), &[])},
+         "inputSchema": s(json!({"size": {"type": "integer", "description": "Logos per batch (default 15)"},
+            "write": {"type": "boolean", "description": "Also write every batch into the pickup folder's prompts/ (batch-NN.txt to paste, batch-NN.json with the order)"}}), &[])},
+        {"name": "code_import_logos", "description": "Import rendered logos — by default everything in the pickup folder (images and zips): images named as the prompts asked (<slug>.png, family-<id>.png) match by name; with batch=N, images whose names match nothing are matched to that batch's missing logos in the order they were saved (only if the counts agree). Look at the images (they are moved to imported/) to check order matches before telling the user.",
+         "inputSchema": s(json!({"paths": arr("Files or folders (default: the pickup folder)"), "batch": {"type": "integer", "description": "Batch number, to match unnamed images by order"}}), &[])},
         {"name": "code_logo_pr", "description": "Open a pull request on a project's GitHub repository adding its imported logo (assets/logo.png) at the top of its README. This WRITES TO THE USER'S REPOSITORIES: list what you will do and get explicit confirmation, then pass confirm=true.",
          "inputSchema": s(json!({"slugs": arr("Project slugs"), "all": {"type": "boolean", "description": "Every imported logo without a PR"}, "confirm": {"type": "boolean"}}), &["confirm"])},
     ])
@@ -321,7 +324,7 @@ fn call(root: &PathBuf, name: &str, a: &Value) -> Result<Value> {
             })
         }
         "post_models" => crate::integrations::site_models::post_models(&site, req(a, "id")?),
-        "code_list" | "code_get" | "code_update" | "code_category" | "code_family" | "code_apply_scheme" | "code_sync" | "code_logo_prompts" | "code_logo_pr" => {
+        "code_list" | "code_get" | "code_update" | "code_category" | "code_family" | "code_apply_scheme" | "code_sync" | "code_logo_prompts" | "code_import_logos" | "code_logo_pr" => {
             use crate::integrations::code_catalog as cc;
             let strs = |k: &str| a.get(k).and_then(|v| v.as_array()).map(|x| x.iter().filter_map(|s| s.as_str().map(str::to_string)).collect::<Vec<_>>());
             match name {
@@ -348,7 +351,11 @@ fn call(root: &PathBuf, name: &str, a: &Value) -> Result<Value> {
                 "code_category" => cc::category(&site, req(a, "id")?, sv(a, "title"), sv(a, "description"), a.get("remove").and_then(|v| v.as_bool()).unwrap_or(false)),
                 "code_apply_scheme" => cc::apply_scheme(&site, &serde_json::from_value(a.clone())?).map(|v| json!({ "applied": v["applied"], "categories": v["categories"] })),
                 "code_sync" => Ok(serde_json::to_value(cc::sync(&site, a.get("logos").and_then(|v| v.as_bool()).unwrap_or(true), false, &|l| eprintln!("{l}"))?)?),
-                "code_logo_prompts" => cc::logo_prompts(&site, a.get("size").and_then(|v| v.as_u64()).unwrap_or(10).clamp(1, 50) as usize),
+                "code_logo_prompts" => {
+                    let size = a.get("size").and_then(|v| v.as_u64()).unwrap_or(15).clamp(1, 50) as usize;
+                    if a.get("write").and_then(|v| v.as_bool()) == Some(true) { cc::write_prompt_files(&site, size) } else { cc::logo_prompts(&site, size) }
+                }
+                "code_import_logos" => cc::import_logos(&site, &strs("paths").unwrap_or_default().into_iter().map(PathBuf::from).collect::<Vec<_>>(), a.get("batch").and_then(|v| v.as_u64()).map(|n| n as usize)),
                 _ => {
                     if a.get("confirm").and_then(|v| v.as_bool()) != Some(true) {
                         bail!("opening pull requests needs confirm=true, after the user has agreed");

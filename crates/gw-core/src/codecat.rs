@@ -47,6 +47,9 @@ pub const LOGO_DIR: &str = "code-logos";
 pub const URL: &str = "/code/";
 
 pub const DEFAULT_TITLE: &str = "Code";
+/// Where rendered logos are saved and picked up, with the prompt files in `prompts/` and imported
+/// images moved to `imported/`.
+pub const DEFAULT_INBOX: &str = "~/Pictures/gitwebsite-logos";
 pub const DEFAULT_INTRO: &str = "Projects I have built and published on GitHub — tools, experiments, retro computing and more. Filter by category or search; open one for what it does and where to find it.";
 pub const DEFAULT_LOGO_STYLE: &str = "Style: a clean, modern flat vector logo mark — a single bold, simple symbol that still reads at 64 pixels, \
 centred on a transparent background (or plain white if transparency is not possible), with a limited palette of two or three \
@@ -65,6 +68,9 @@ pub struct Catalog {
     /// Appended to every composed logo prompt, so the logos look like a family.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub logo_style: String,
+    /// The folder rendered logos are saved to and picked up from (default [`DEFAULT_INBOX`]).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub logo_inbox: String,
     #[serde(default)]
     pub categories: Vec<Category>,
     /// Logo families: one mark shared by every project that names the family.
@@ -491,7 +497,7 @@ fn first_paragraph(text: &str) -> String {
 }
 
 /// One logo to render: which project, the file name to save it as, and the prompt.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PromptItem {
     pub slug: String,
     pub title: String,
@@ -558,15 +564,21 @@ pub fn match_family_file<'a>(cat: &'a Catalog, file_name: &str) -> Option<&'a Fa
 
 /// A batch as text to paste into ChatGPT: one numbered prompt per logo, each naming its file.
 pub fn batch_text(batch: &[PromptItem], number: usize, of: usize) -> String {
+    let n = batch.len();
     let mut s = format!(
-        "Logo batch {number} of {of}: {} logo{}. Make one separate square image per numbered item below — do not combine them. \
-         After each image, tell me the file name given for it.\n",
-        batch.len(),
-        if batch.len() == 1 { "" } else { "s" }
+        "Logo batch {number} of {of}: {n} logo{pl}. Make {n} separate square images, one per numbered item below, in this order — \
+never combine several logos in one image. Each item gives the exact FILE NAME its image must have.\n\n\
+- Under each image, write its number and file name, e.g. \"1 — {first}\".\n\
+- If you can, give me each image as a download with exactly that file name; when all {n} are done, give me one zip file \
+named logos-batch-{number:02}.zip holding them all under those names.\n\
+- If you can't name files, still make them strictly in the order listed, so I can download them in order.\n",
+        pl = if n == 1 { "" } else { "s" },
+        first = batch.first().map(|i| i.file.as_str()).unwrap_or("name.png"),
     );
     for (i, it) in batch.iter().enumerate() {
-        s.push_str(&format!("\n{}. File name: {}\n{}\n", i + 1, it.file, it.prompt));
+        s.push_str(&format!("\n{}. FILE NAME: {}\n{}\n", i + 1, it.file, it.prompt));
     }
+    s.push_str(&format!("\nFile names, in order: {}\n", batch.iter().map(|i| i.file.as_str()).collect::<Vec<_>>().join(", ")));
     s
 }
 
@@ -989,7 +1001,8 @@ mod tests {
         assert!(b[0][0].prompt.ends_with("House style."));
         assert_eq!(b[0][1].prompt, "My own prompt");
         let t = batch_text(&b[0], 1, 1);
-        assert!(t.contains("Logo batch 1 of 1: 2 logos") && t.contains("1. File name: amiga-games.png") && t.contains("2. File name: gw.png"));
+        assert!(t.contains("Logo batch 1 of 1: 2 logos") && t.contains("1. FILE NAME: amiga-games.png") && t.contains("2. FILE NAME: gw.png"));
+        assert!(t.contains("logos-batch-01.zip") && t.contains("File names, in order: amiga-games.png, gw.png"));
     }
 
     #[test]

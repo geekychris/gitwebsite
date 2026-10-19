@@ -32,15 +32,20 @@ replaces). By hand: `gw code category <id> --title … --description …`, `gw c
 
 ## Logos (ChatGPT batches)
 
-1. `gw code logo-prompts --size 10` [`code_logo_prompts`] prints numbered batches, each item
-   naming the file to save as (`<slug>.png`). Give the user one batch at a time to paste into
-   ChatGPT. A better summary (improve the text first) gives a better prompt; a project's own
-   `logo_prompt` overrides the composed one.
+1. `gw code logo-prompts --size 15 --write` [`code_logo_prompts` with `write: true`] writes every
+   batch to the pickup folder (`~/Pictures/gitwebsite-logos/prompts/batch-NN.txt`, plus a `.json`
+   with the order). Each item names its file (`<slug>.png`, `family-<id>.png`). Point the user at
+   the batch files (or paste one). A better summary (improve the text first) gives a better
+   prompt; a project's own `logo_prompt` overrides the composed one.
    Projects that should share one mark (a framework's modules) form a **logo family**:
    `gw code family <id> --title … --concept "…" --category <cat>` [`code_family`] — the family is
    one prompt item (`family-<id>.png`) and its members show the mark.
-2. The user saves the images; `gw code import-logos <folder or files>` matches them by file name
-   (or they drop them on the app's Logos page).
+2. The user saves the images (or ChatGPT's zip) into the pickup folder. `gw code import-logos`
+   [`code_import_logos`] matches them by name; for images saved under ChatGPT's own names pass
+   `--batch N` [`batch`] to match by the order saved. **After an order match, look at the
+   imported images** (`static/code-logos/<slug>.png`, Read them) and check each fits its project;
+   if two are swapped, re-import the right file for a project with `gw code import-logos <file>`
+   after renaming it `<slug>.png`.
 3. Adding logos to the repositories opens pull requests on the user's GitHub — **ask first**, list
    the repositories, then `gw code logo-pr --all --yes` [`code_logo_pr` with `confirm: true`].
 

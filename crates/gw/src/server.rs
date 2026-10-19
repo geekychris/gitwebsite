@@ -492,7 +492,17 @@ mod code_api {
         size: Option<usize>,
     }
     pub async fn prompts(State(st): State<AppState>, Query(q): Query<PromptsQuery>) -> ApiResult {
-        with_site(&st, move |s| cc::logo_prompts(s, q.size.unwrap_or(10).clamp(1, 50))).await
+        with_site(&st, move |s| {
+            let mut v = cc::logo_prompts(s, q.size.unwrap_or(15).clamp(1, 50))?;
+            v["inbox"] = json!(cc::inbox(s)?.display().to_string());
+            Ok(v)
+        })
+        .await
+    }
+    /// POST /api/code/logo-prompts/write {size} — every batch into the pickup folder's prompts/.
+    pub async fn prompts_write(State(st): State<AppState>, Json(b): Json<Value>) -> ApiResult {
+        let size = b["size"].as_u64().unwrap_or(15).clamp(1, 50) as usize;
+        with_site(&st, move |s| cc::write_prompt_files(s, size)).await
     }
     #[derive(Deserialize)]
     pub struct UploadQuery {
@@ -505,11 +515,14 @@ mod code_api {
     }
     #[derive(Deserialize)]
     pub struct ImportBody {
+        #[serde(default)]
         paths: Vec<PathBuf>,
+        #[serde(default)]
+        batch: Option<usize>,
     }
     /// POST /api/code/logos/import {paths: [file or folder…]}
     pub async fn import(State(st): State<AppState>, Json(b): Json<ImportBody>) -> ApiResult {
-        with_site(&st, move |s| cc::import_logos(s, &b.paths)).await
+        with_site(&st, move |s| cc::import_logos(s, &b.paths, b.batch)).await
     }
     #[derive(Deserialize)]
     pub struct PrBody {
@@ -1257,6 +1270,7 @@ fn router_for(st: AppState) -> Router {
         .route("/api/code/scheme", post(code_api::scheme))
         .route("/api/code/family", post(code_api::family))
         .route("/api/code/logo-prompts", get(code_api::prompts))
+        .route("/api/code/logo-prompts/write", post(code_api::prompts_write))
         .route("/api/code/logos/upload", post(code_api::upload).layer(axum::extract::DefaultBodyLimit::max(32 * 1024 * 1024)))
         .route("/api/code/logos/import", post(code_api::import))
         .route("/api/code/logo-prs", post(code_api::logo_prs))

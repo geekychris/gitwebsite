@@ -2779,7 +2779,7 @@ async function confirmLogoPrs(slugs, c, after) {
 }
 
 async function viewCodeLogos() {
-  const size = parseInt(sessionStorage.getItem('gw-code-batch') || '10', 10);
+  const size = parseInt(sessionStorage.getItem('gw-code-batch') || '15', 10);
   const [pr, c] = await Promise.all([get('/code/logo-prompts?size=' + size), get('/code')]);
   const waiting = c.projects.filter(p => p.listed && !p.logo_pr && ((p.logo_source === 'imported' && p.logo) || p.logo_from_family));
   main.innerHTML = `
@@ -2787,18 +2787,26 @@ async function viewCodeLogos() {
     <h1>Logos</h1>
     <p class="sub">${pr.count} project${pr.count === 1 ? '' : 's'} on the website without a logo. Paste a batch into ChatGPT, save each image under the file name it is given
       (<span class="mono">&lt;slug&gt;.png</span>), then drop the images below. Improve a project's text first (✦ Improve with Claude) and its prompt gets better too.</p>
-    <div class="drop" data-drop tabindex="0"><strong>Drop rendered logos here</strong> — matched to projects by file name<br>
-      <span class="small">or import a folder: <input data-dir placeholder="~/Downloads" style="width:18rem"> <button data-import>Import folder</button></span></div>
+    <div class="panel"><strong>Pickup folder</strong> <span class="mono small">${esc(pr.inbox)}</span>
+      <p class="small muted" style="margin:.3rem 0">1. <em>Save prompt files</em> writes every batch to <span class="mono">prompts/batch-NN.txt</span> — paste one into ChatGPT.
+        2. Save its images (or the zip it offers) into the pickup folder. 3. <em>Import</em>. Images named as asked match by name;
+        for images saved under ChatGPT's own names, pick the batch and they are matched in the order you saved them.</p>
+      <div class="bar" style="margin:.3rem 0 0"><button data-write>Save prompt files (${pr.batches.length} batch${pr.batches.length === 1 ? '' : 'es'})</button>
+        <span class="grow"></span>
+        <label class="inline">Unnamed images are from <select data-imp-batch><option value="">— names only —</option>${pr.batches.map(b => `<option value="${b.number}">batch ${b.number}</option>`).join('')}</select></label>
+        <button class="primary" data-import>Import from pickup folder</button></div></div>
+    <div class="drop" data-drop tabindex="0"><strong>Or drop rendered logos here</strong> — matched to projects by file name</div>
     <pre class="list claude-log" data-joblog hidden></pre>
     <div data-results></div>
     ${waiting.length ? `<h2>New logos not yet in their repositories (${waiting.length})</h2>
       <div class="code-logo-strip">${waiting.map(p => `<a href="#code/${encodeURIComponent(p.slug)}" title="${esc(p.repo)}">${codeLogo(p, 64)}<span class="small">${esc(p.display_title)}</span></a>`).join('')}</div>
       <div class="bar"><button class="primary" data-prs>Open ${waiting.length} pull request${waiting.length === 1 ? '' : 's'}…</button><span class="muted small">Adds assets/logo.png and puts the logo at the top of each README.</span></div>` : ''}
     <h2>Prompts</h2>
-    <div class="bar"><label class="inline">Logos per batch <select data-size>${[5, 10, 15, 20].map(n => `<option ${n === size ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+    <div class="bar"><label class="inline">Logos per batch <select data-size>${[5, 10, 15, 20, 25].map(n => `<option ${n === size ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
       <span class="grow"></span><span class="muted small">House style (end of every prompt): <a href="#code/categories">change</a></span></div>
     ${pr.batches.map(b => `<div class="panel code-batch"><div class="bar" style="margin:0 0 .5rem"><strong>Batch ${b.number} of ${pr.batches.length}</strong> <span class="muted small">${b.items.length} logos</span><span class="grow"></span>
         <button class="primary" data-copy-batch="${b.number - 1}">Copy batch ${b.number}</button></div>
+      <p class="muted small" style="margin:0 0 .4rem">Save as: ${b.items.map(i => `<span class="mono">${esc(i.file)}</span>`).join(', ')}</p>
       <ol class="code-prompts">${b.items.map(i => `<li><a href="${i.slug.startsWith('family-') ? '#code/categories' : '#code/' + encodeURIComponent(i.slug)}"><strong>${esc(i.title)}</strong></a> <span class="mono small">${esc(i.file)}</span>
         <button class="small" data-copy-one="${esc(i.slug)}">Copy</button><div class="muted small">${esc(i.prompt)}</div></li>`).join('')}</ol></div>`).join('')
       || '<p class="empty">Every project on the website has a logo.</p>'}`;
@@ -2810,7 +2818,7 @@ async function viewCodeLogos() {
   });
   const results = $('[data-results]');
   const report = (ok, bad) => {
-    results.innerHTML = `${ok.length ? `<p>Imported ${ok.length}: ${ok.map(r => `<a href="#code/${encodeURIComponent(r.slug)}">${esc(r.slug)}</a>`).join(', ')}</p>` : ''}
+    results.innerHTML = `${ok.length ? `<p>Imported ${ok.length}: ${ok.map(r => `<a href="${r.family ? '#code/categories' : '#code/' + encodeURIComponent(r.slug)}">${esc(r.slug)}</a>${r.by === 'order' ? ` <span class="muted small">(by order, from ${esc(r.from)})</span>` : ''}`).join(', ')}</p>` : ''}
       ${bad.length ? `<p class="list problems">${bad.map(b => esc(b)).join('\n')}</p>` : ''}`;
   };
   const drop = $('[data-drop]');
@@ -2831,13 +2839,16 @@ async function viewCodeLogos() {
     if (ok.length) { await viewCodeLogos(); }
     report(ok, bad);
   };
+  $('[data-write]').onclick = () => guard(async () => {
+    const r = await api('POST', '/code/logo-prompts/write', { size });
+    toast(`${r.batches} prompt files saved in ${r.prompts}`);
+  });
   $('[data-import]').onclick = () => guard(async () => {
-    const dir = $('[data-dir]').value.trim();
-    if (!dir) return toast('Give a folder', true);
-    const r = await api('POST', '/code/logos/import', { paths: [dir] });
-    toast(`${r.imported.length} imported, ${r.unmatched.length} not matched`);
+    const b = $('[data-imp-batch]').value;
+    const r = await api('POST', '/code/logos/import', b ? { batch: +b } : {});
+    toast(`${r.imported.length} imported, ${r.unmatched.length} not matched`, !!r.unmatched.length);
     await viewCodeLogos();
-    report(r.imported, r.unmatched.map(u => `${u.file}: ${u.error}`));
+    report(r.imported, [...(r.note ? [r.note] : []), ...r.unmatched.map(u => `${u.file}: ${u.error}`)]);
   });
   const prs = $('[data-prs]');
   if (prs) prs.onclick = () => confirmLogoPrs(waiting.map(p => p.slug), c, () => viewCodeLogos());
