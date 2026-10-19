@@ -55,6 +55,8 @@ pub fn show(site: &Site, id: &str) -> Result<Value> {
     let it = site.item(id)?;
     let mut v = item_json(&it);
     v["source_text"] = json!(std::fs::read_to_string(&it.path)?);
+    v["hero_url"] = json!(gw_core::build::hero_url(&it, &site.media()?));
+    v["hero"] = json!(it.hero);
     Ok(v)
 }
 

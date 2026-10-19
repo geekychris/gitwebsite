@@ -1,6 +1,6 @@
 {% macro card(v) %}
 <article class="card kind-{{ v.kind }}">
-  {% if v.hero_url %}<a class="card-img" href="{{ v.url }}"><img src="{{ v.hero_url | safe }}" alt="" loading="lazy"></a>{% endif %}
+  {% if v.hero_url %}<a class="card-img" href="{{ v.url }}"{% if v.hero_box_style %} style="{{ v.hero_box_style }}"{% endif %}><img src="{{ v.hero_url | safe }}" alt="" loading="lazy"{% if v.hero_img_style %} style="{{ v.hero_img_style }}"{% endif %}></a>{% endif %}
   <div class="card-body">
     <p class="eyebrow">{{ v.kind_label }}{% if v.date_human %} · <time datetime="{{ v.date_iso }}">{{ v.date_human }}</time>{% endif %}</p>
     <h3><a href="{{ v.url }}">{{ v.title }}</a></h3>
@@ -15,7 +15,7 @@
    every area path it is in (ancestors too), matched by the filter buttons. #}
 {% macro grouped_card(e) %}
 <article class="card kind-{{ e.kind }}" data-areas="{{ e.filter }}">
-  {% if e.hero_url %}<a class="card-img" href="{{ e.url }}"><img src="{{ e.hero_url | safe }}" alt="" loading="lazy"></a>{% endif %}
+  {% if e.hero_url %}<a class="card-img" href="{{ e.url }}"{% if e.hero_box_style %} style="{{ e.hero_box_style }}"{% endif %}><img src="{{ e.hero_url | safe }}" alt="" loading="lazy"{% if e.hero_img_style %} style="{{ e.hero_img_style }}"{% endif %}></a>{% endif %}
   <div class="card-body">
     <p class="eyebrow">{{ e.kind_label }}{% if e.date_human %} · <time datetime="{{ e.date_iso }}">{{ e.date_human }}</time>{% endif %}</p>
     <h3><a href="{{ e.url }}">{{ e.title }}</a></h3>

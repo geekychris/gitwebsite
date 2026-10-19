@@ -15,7 +15,7 @@
   <h2 class="section-title">Pinned</h2>
   <div class="pin-list">{% for v in pinned %}
     <article class="card card-pinned kind-{{ v.kind }}">
-      {% if v.hero_url %}<a class="card-img" href="{{ v.url }}"><img src="{{ v.hero_url | safe }}" alt="" loading="lazy"></a>{% endif %}
+      {% if v.hero_url %}<a class="card-img" href="{{ v.url }}"{% if v.hero_box_style %} style="{{ v.hero_box_style }}"{% endif %}><img src="{{ v.hero_url | safe }}" alt="" loading="lazy"{% if v.hero_img_style %} style="{{ v.hero_img_style }}"{% endif %}></a>{% endif %}
       <div class="card-body">
         <p class="eyebrow">{{ v.kind_label }}{% if v.date_human %} · <time datetime="{{ v.date_iso }}">{{ v.date_human }}</time>{% endif %}</p>
         <h3><a href="{{ v.url }}">{{ v.title }}</a></h3>
