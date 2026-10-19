@@ -2571,15 +2571,18 @@ async function viewCode(rest = []) {
   const cat = sessionStorage.getItem('gw-code-cat') || 'all';
   const show = sessionStorage.getItem('gw-code-show') || 'listed';   // listed | hidden | all | nologo
   const catTitle = id => (c.categories.find(x => x.id === id) || {}).title || (id ? id : 'No category');
-  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
-  const hay = p => `${p.slug} ${p.repo} ${p.display_title} ${p.display_summary} ${(p.tags || []).join(' ')} ${(p.github || {}).language || ''}`.toLowerCase();
-  const shown = c.projects.filter(p =>
-    (cat === 'all' || (p.category || '') === (cat === 'none' ? '' : cat)) &&
-    (show === 'all' || (show === 'listed' && p.listed) || (show === 'hidden' && !p.listed) || (show === 'nologo' && p.listed && !p.logo)) &&
-    words.every(w => hay(p).includes(w)))
-    .sort((a, b) => a.display_title.localeCompare(b.display_title));
+  // `_` and `-` read as spaces, so "amiga" finds amiga_mcp.
+  const words = q.toLowerCase().replace(/[_-]/g, ' ').split(/\s+/).filter(Boolean);
+  const hay = p => `${p.slug} ${p.repo} ${p.display_title} ${p.display_summary} ${p.description || ''} ${(p.tags || []).join(' ')} ${(p.github || {}).language || ''} ${((p.github || {}).topics || []).join(' ')} ${catTitle(p.category)}`.toLowerCase().replace(/[_-]/g, ' ');
+  const inShow = p => show === 'all' || (show === 'listed' && p.listed) || (show === 'hidden' && !p.listed) || (show === 'nologo' && p.listed && !p.logo);
+  const inCat = p => cat === 'all' || (p.category || '') === (cat === 'none' ? '' : cat);
+  const found = c.projects.filter(p => words.every(w => hay(p).includes(w)));
+  const shown = found.filter(p => inCat(p) && inShow(p)).sort((a, b) => a.display_title.localeCompare(b.display_title));
+  // The chips count what the search finds (among the projects the show filter keeps).
   const counts = {};
-  c.projects.filter(p => p.listed).forEach(p => { counts[p.category || ''] = (counts[p.category || ''] || 0) + 1; });
+  const counted = found.filter(inShow);
+  counted.forEach(p => { counts[p.category || ''] = (counts[p.category || ''] || 0) + 1; });
+  const elsewhere = shown.length ? 0 : found.length;
   const chip = (id, label, n) => `<button class="chip${id === cat ? ' on' : ''}" data-cat="${esc(id)}">${esc(label)} <span class="muted">${n}</span></button>`;
   const job = c.job || {};
   main.innerHTML = `
@@ -2605,7 +2608,7 @@ async function viewCode(rest = []) {
       <input type="search" data-q placeholder="Search projects" value="${esc(q)}" style="flex:1;min-width:14rem">
       ${[['listed', 'On website'], ['hidden', 'Hidden'], ['nologo', 'No logo'], ['all', 'All']].map(([id, l]) => `<button class="chip${id === show ? ' on' : ''}" data-show="${id}">${l}</button>`).join('')}
     </div>
-    <div class="bar">${chip('all', 'All categories', c.counts.listed)}${c.categories.map(x => chip(x.id, x.title, counts[x.id] || 0)).join('')}${counts[''] ? chip('none', 'No category', counts['']) : ''}</div>
+    <div class="bar">${chip('all', 'All categories', counted.length)}${c.categories.map(x => chip(x.id, x.title, counts[x.id] || 0)).join('')}${counts[''] ? chip('none', 'No category', counts['']) : ''}</div>
     <table class="code-table"><thead><tr><th></th><th>Project</th><th>Category</th><th>Tags</th><th title="Shown on the website">On site</th></tr></thead>
     <tbody>${shown.map(p => `<tr class="clickable" data-slug="${esc(p.slug)}">
       <td style="width:52px">${codeLogo(p)}</td>
@@ -2614,11 +2617,15 @@ async function viewCode(rest = []) {
       <td>${p.category ? `<span class="pill">${esc(catTitle(p.category))}</span>` : '<span class="muted small">—</span>'}</td>
       <td class="small">${(p.tags || []).map(t => `<span class="pill">${esc(t)}</span>`).join(' ')}</td>
       <td><input type="checkbox" data-onsite="${esc(p.slug)}" ${p.listed ? 'checked' : ''} ${p.github.private || p.github.gone ? 'disabled' : ''} title="Show on the website"></td></tr>`).join('')
-      || '<tr><td colspan="5" class="empty">No projects here.</td></tr>'}</tbody></table>`;
+      || `<tr><td colspan="5" class="empty">${elsewhere && (cat !== 'all' || show !== 'all')
+        ? `No projects here match — <button class="link" data-allfilters>show all ${elsewhere} match${elsewhere === 1 ? '' : 'es'}</button> (every category, listed or hidden).`
+        : 'No projects here.'}</td></tr>`}</tbody></table>`;
   const qBox = $('[data-q]');
   let t;
   qBox.oninput = () => { clearTimeout(t); t = setTimeout(() => { sessionStorage.setItem('gw-code-q', qBox.value); viewCode().then(() => { const b = $('[data-q]'); b.focus(); b.setSelectionRange(b.value.length, b.value.length); }); }, 250); };
   $$('[data-cat]').forEach(b => b.onclick = () => { sessionStorage.setItem('gw-code-cat', b.dataset.cat); viewCode(); });
+  const allf = $('[data-allfilters]');
+  if (allf) allf.onclick = () => { sessionStorage.setItem('gw-code-cat', 'all'); sessionStorage.setItem('gw-code-show', 'all'); viewCode(); };
   $$('[data-show]').forEach(b => b.onclick = () => { sessionStorage.setItem('gw-code-show', b.dataset.show); viewCode(); });
   $$('[data-onsite]').forEach(cb => {
     cb.onclick = e => e.stopPropagation();
