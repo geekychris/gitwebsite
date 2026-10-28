@@ -28,6 +28,7 @@ pub const TEMPLATES: &[(&str, &str)] = &[
     ("publications.html", include_str!("../theme/templates/publications.html")),
     ("sitemap.xml", include_str!("../theme/templates/sitemap.xml")),
     ("tool.html", include_str!("../theme/templates/tool.html")),
+    ("tool_works_with.html", include_str!("../theme/templates/tool_works_with.html")),
     ("tools.html", include_str!("../theme/templates/tools.html")),
 ];
 

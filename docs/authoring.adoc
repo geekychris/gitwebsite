@@ -41,6 +41,7 @@ All content is AsciiDoc. A post is a header, a blank line, and the body.
 | `:embed:` | Apps: `true` to embed the live app in the page.
 | `:source:` | Registry id this content came from (imports set this).
 | `:slug:` | Override the URL slug (default: from the file name).
+| `:works-with:` | Tools: other tools this one is used together with, each with a reason — see <<works-with>>.
 |===
 
 Create items with the CLI rather than by hand — it puts files in the right place and
@@ -231,6 +232,32 @@ GW.tool('mytool', (root, k) => {
 The kit (`static/tools/tools.js`) provides element building, tabs, segmented controls, copy
 buttons, toasts, file pick/read/download, persistent state, and the `.t-*` styles in
 `static/tools/tools.css`. Set `:tool:` if the script name differs from the slug.
+
+[[works-with]]
+=== Works with
+
+A tool page can point to the other tools it is genuinely used together with. Name them in the
+header, each with one line on why:
+
+[source,asciidoc]
+----
+:works-with: graph: plot the curve this fit produces; units: convert the inputs first
+----
+
+Entries are separated by `;`; in each, the tool's slug (its `content/tools/<slug>.adoc`) comes
+before the first `:` and the reason after it, so a reason may contain `:` but not `;`. The reason
+is plain text. The page shows a *Works with* panel after the tool and before *How to use it*: each
+entry links to `/tools/<slug>/` with that tool's title and category, and the reason. Tools left
+out of the build (drafts) are left out of the panel.
+
+Nothing is linked back automatically: if the other tool should point here too, give it its own
+`:works-with:` entry, worded from its side. `gw check` reports an entry naming no tool and a
+malformed entry (no `:`, no reason, not a slug) as errors — `gw check` then exits with status 1 —
+and a tool naming itself or the same tool twice as warnings. `tools_list` and `tool_info` (MCP,
+`/api/tools`) include `works_with`.
+
+A site with its own `templates/tool.html` shows the panel by including the built-in partial where
+it should appear: `{% include "tool_works_with.html" %}`.
 
 === Shareable links (deep links)
 

@@ -92,8 +92,16 @@ impl Site {
     }
 
     /// Check the site: content parses, areas exist, projects referenced by updates exist,
-    /// media keys resolve, registry sources resolve. Returns warnings; errors are `Err`.
+    /// media keys resolve, registry sources resolve. Returns every problem (the errors of
+    /// [`Site::check_report`] first); a site that cannot be read at all is `Err`.
     pub fn check(&self) -> Result<Vec<String>> {
+        let r = self.check_report()?;
+        Ok(r.errors.into_iter().chain(r.warnings).collect())
+    }
+
+    /// [`Site::check`] by severity: errors are references that cannot work (a `:works-with:`
+    /// naming no tool, a malformed entry); everything else is a warning.
+    pub fn check_report(&self) -> Result<CheckReport> {
         let items = self.items()?;
         let media = self.media()?;
         let reg = self.registry()?;
@@ -138,8 +146,42 @@ impl Site {
         }
         problems.extend(crate::gallery::check(&self.root, &self.static_dir(), &media));
         problems.extend(crate::codecat::check(&self.root, &self.static_dir()));
-        Ok(problems)
+        let (errors, ww_warnings) = works_with_problems(&items);
+        problems.extend(ww_warnings);
+        Ok(CheckReport { errors, warnings: problems })
     }
+}
+
+/// The result of [`Site::check_report`].
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct CheckReport {
+    pub errors: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+/// `:works-with:` on tool pages: an entry naming no tool or a malformed entry is an error; a
+/// tool naming itself, or the same tool twice, is a warning; the attribute anywhere but a tool
+/// page is a warning (only tool pages show it). Returns (errors, warnings).
+pub fn works_with_problems(items: &[Item]) -> (Vec<String>, Vec<String>) {
+    let tools: std::collections::BTreeSet<&str> = items.iter().filter(|i| i.kind == Kind::Tool).map(|i| i.slug.as_str()).collect();
+    let (mut errors, mut warnings) = (vec![], vec![]);
+    for it in items.iter().filter(|i| i.attrs.contains_key("works-with")) {
+        if it.kind != Kind::Tool {
+            warnings.push(format!("{}: :works-with: is only shown on tool pages", it.id));
+            continue;
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for e in it.works_with() {
+            match e {
+                Err(m) => errors.push(format!("{}: :works-with: {m}", it.id)),
+                Ok(w) if w.slug == it.slug => warnings.push(format!("{}: :works-with: names the tool itself", it.id)),
+                Ok(w) if !tools.contains(w.slug.as_str()) => errors.push(format!("{}: :works-with: no tool {:?} (content/tools/{}.adoc)", it.id, w.slug, w.slug)),
+                Ok(w) if !seen.insert(w.slug.clone()) => warnings.push(format!("{}: :works-with: {:?} is listed twice", it.id, w.slug)),
+                Ok(_) => {}
+            }
+        }
+    }
+    (errors, warnings)
 }
 
 fn find_root() -> Result<PathBuf> {

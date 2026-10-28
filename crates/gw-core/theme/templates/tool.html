@@ -12,6 +12,7 @@
   <div class="tool-root" id="tool-root" data-tool="{{ item.attrs.tool | default(value=item.slug) }}">
     <noscript><p class="empty">This tool runs in your browser and needs JavaScript.</p></noscript>
   </div>
+  {% include "tool_works_with.html" %}
   {% if item.html %}
   <details class="tool-help"{% if item.attrs.help_open %} open{% endif %}>
     <summary>How to use it</summary>

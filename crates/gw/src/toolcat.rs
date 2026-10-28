@@ -42,6 +42,8 @@ pub struct Tool {
     pub tabs: Vec<String>,
     /// Example links found on the page (site-relative, e.g. /tools/graph/?f=sin(x)).
     pub links: Vec<String>,
+    /// Tools this one is used together with, and why (`:works-with:`; malformed entries left out).
+    pub works_with: Vec<gw_core::content::WorksWith>,
     pub path: String,
 }
 
@@ -166,6 +168,7 @@ pub fn parse(slug: &str, text: &str, path: &Path) -> Option<Tool> {
         deeplink: attrs.get("deeplink").map(|v| v == "true").unwrap_or(false),
         network: attrs.get("network").map(|v| v == "true").unwrap_or(false),
         draft: attrs.get("status").map(|v| v == "draft").unwrap_or(false),
+        works_with: attrs.get("works-with").map(|s| gw_core::content::parse_works_with(s).into_iter().flatten().collect()).unwrap_or_default(),
         path: path.display().to_string(),
         ..Default::default()
     };
@@ -338,6 +341,7 @@ pub fn list(site_root: &Path, category: Option<&str>, query: Option<&str>) -> Re
                 "params": t.params.iter().map(|p| p.name.clone()).collect::<Vec<_>>(),
                 "presets": t.presets.iter().map(|p| p.name.clone()).collect::<Vec<_>>(),
                 "tabs": t.tabs, "network": t.network,
+                "works_with": t.works_with.iter().map(|w| w.slug.clone()).collect::<Vec<_>>(),
             })
         })
         .collect();

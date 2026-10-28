@@ -136,8 +136,9 @@ pub fn areas(site: &Site) -> Result<Value> {
 }
 
 pub fn check(site: &Site) -> Result<Value> {
-    let problems = site.check()?;
-    Ok(json!({ "ok": problems.is_empty(), "problems": problems }))
+    let r = site.check_report()?;
+    let problems: Vec<&String> = r.errors.iter().chain(&r.warnings).collect();
+    Ok(json!({ "ok": problems.is_empty(), "problems": problems, "errors": r.errors, "warnings": r.warnings }))
 }
 
 pub fn do_build(site: &Site, drafts: bool) -> Result<Value> {
