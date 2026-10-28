@@ -18,6 +18,7 @@
 //! :source: wordpress-123    // registry id this content came from
 //! :featured: true
 //! :pinned: 1               // home page: pinned at the top (optional number orders the pins)
+//! :works-with: graph: plots the fitted curve; units: converts the inputs   // tools only
 //! ```
 //!
 //! Where an item lives decides its kind and URL when `:type:` is absent:
@@ -121,6 +122,41 @@ impl Item {
     pub fn hero_crop(&self) -> Option<[f64; 4]> {
         parse_crop(self.attrs.get("hero-crop")?)
     }
+    /// `:works-with:` — other tools this one is used together with (see [`parse_works_with`]).
+    pub fn works_with(&self) -> Vec<Result<WorksWith, String>> {
+        self.attrs.get("works-with").map(|s| parse_works_with(s)).unwrap_or_default()
+    }
+}
+
+/// One `:works-with:` entry on a tool page: another tool (by slug) and why they go together.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WorksWith {
+    pub slug: String,
+    pub reason: String,
+}
+
+/// `:works-with: graph: plots the fitted curve; units: converts the inputs` → one entry per
+/// `;`-separated part, the slug before its first `:` and the reason (plain text) after it; a
+/// malformed part (no `:`, an empty or invalid slug, no reason) is an `Err` describing it. Empty
+/// parts (a trailing `;`) are ignored.
+pub fn parse_works_with(s: &str) -> Vec<Result<WorksWith, String>> {
+    s.split(';')
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(|p| {
+            let Some((slug, reason)) = p.split_once(':') else {
+                return Err(format!("{p:?} wants `<tool slug>: <reason>`"));
+            };
+            let (slug, reason) = (slug.trim(), reason.trim());
+            if slug.is_empty() || !slug.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_') {
+                return Err(format!("{p:?}: {slug:?} is not a tool slug (lowercase letters, digits, -)"));
+            }
+            if reason.is_empty() {
+                return Err(format!("{p:?}: say why, after the `:`"));
+            }
+            Ok(WorksWith { slug: slug.to_string(), reason: reason.to_string() })
+        })
+        .collect()
 }
 
 /// Parse the document header: `= Title` then `:name: value` lines until the first blank line.
@@ -287,4 +323,53 @@ pub fn scan(root: &Path) -> Result<Vec<Item>> {
         }
     }
     Ok(items)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ok(slug: &str, reason: &str) -> Result<WorksWith, String> {
+        Ok(WorksWith { slug: slug.into(), reason: reason.into() })
+    }
+
+    #[test]
+    fn works_with_entries_and_separators() {
+        assert_eq!(
+            parse_works_with("graph: plots the fitted curve; units: converts the inputs"),
+            vec![ok("graph", "plots the fitted curve"), ok("units", "converts the inputs")]
+        );
+        // Whitespace around slugs, reasons and separators; empty parts (a trailing `;`) are ignored.
+        assert_eq!(parse_works_with("  graph :  plots it  ;;  units:converts ;  "), vec![ok("graph", "plots it"), ok("units", "converts")]);
+        // Only the first `:` separates: the reason may contain more.
+        assert_eq!(parse_works_with("clock: shows UTC: the time zone the log uses"), vec![ok("clock", "shows UTC: the time zone the log uses")]);
+        assert_eq!(parse_works_with(""), vec![]);
+        assert_eq!(parse_works_with("  ;  "), vec![]);
+    }
+
+    #[test]
+    fn malformed_works_with_entries() {
+        let r = parse_works_with("graph; units: ; : no slug; Big Tool: why; kafka-sim: fine");
+        assert!(r[0].as_ref().is_err_and(|e| e.contains("wants")), "{r:?}");
+        assert!(r[1].as_ref().is_err_and(|e| e.contains("say why")), "{r:?}");
+        assert!(r[2].is_err() && r[3].is_err(), "{r:?}");
+        assert_eq!(r[4], ok("kafka-sim", "fine"));
+    }
+
+    #[test]
+    fn works_with_from_the_header() {
+        let (_, attrs) = parse_header("= T\n:type: tool\n:works-with: a: one: two; b: three\n\nBody.\n");
+        let it = Item { attrs, ..test_item() };
+        assert_eq!(it.works_with(), vec![ok("a", "one: two"), ok("b", "three")]);
+        assert_eq!(test_item().works_with(), vec![]);
+    }
+
+    fn test_item() -> Item {
+        Item {
+            id: "tools/t".into(), kind: Kind::Tool, slug: "t".into(), title: "T".into(), url: "/tools/t/".into(),
+            date: None, updated: None, areas: vec![], tags: vec![], project: None, summary: String::new(), hero: None,
+            draft: false, unlisted: false, featured: false, pinned: false, pin_order: None, repo: None, app_url: None,
+            embed: false, source: None, attrs: BTreeMap::new(), path: PathBuf::new(), bundle_dir: None,
+        }
+    }
 }

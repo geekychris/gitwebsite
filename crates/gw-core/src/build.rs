@@ -71,6 +71,19 @@ struct View {
     html: String,
     project_title: String,
     project_url: String,
+    /// Tool pages: the tools named in `:works-with:` that are in this build, in the page's order.
+    works_with: Vec<WorksWithLink>,
+}
+
+/// A "Works with" entry on a tool page: the other tool and why the two go together.
+#[derive(Debug, Clone, Serialize)]
+struct WorksWithLink {
+    slug: String,
+    url: String,
+    title: String,
+    /// The category's title from site.yaml (`tools: categories`), else its id.
+    category: String,
+    reason: String,
 }
 
 /// A card in a grouped listing: the item, its areas outside its own section (as chips), and
@@ -313,6 +326,32 @@ pub fn build(site: &Site, opts: &BuildOptions) -> Result<BuildReport> {
     let area_titles: BTreeMap<String, String> =
         cfg.flat_areas().into_iter().map(|(p, a)| (p, a.title)).collect();
 
+    // Tools by slug, for `:works-with:` (only those in this build, so every link resolves).
+    let tools_by_slug: BTreeMap<&str, &Item> = items.iter().filter(|i| i.kind == Kind::Tool).map(|i| (i.slug.as_str(), i)).collect();
+    let tool_category = |id: &str| cfg.tools.categories.iter().find(|c| c.id == id).map(|c| c.title.clone()).unwrap_or_else(|| id.to_string());
+    let works_with = |it: &Item| -> Vec<WorksWithLink> {
+        if it.kind != Kind::Tool {
+            return vec![];
+        }
+        let mut out: Vec<WorksWithLink> = vec![];
+        // Malformed entries, unknown tools, the tool itself and repeats are left out (`gw check` reports them).
+        for w in it.works_with().into_iter().flatten() {
+            if w.slug == it.slug || out.iter().any(|o| o.slug == w.slug) {
+                continue;
+            }
+            if let Some(t) = tools_by_slug.get(w.slug.as_str()) {
+                out.push(WorksWithLink {
+                    url: t.url.clone(),
+                    title: t.title.clone(),
+                    category: t.attrs.get("category").map(|c| tool_category(c)).unwrap_or_default(),
+                    reason: w.reason,
+                    slug: w.slug,
+                });
+            }
+        }
+        out
+    };
+
     let living = gallery_home.map(|h| h.id.clone()).zip(gallery.as_ref().and_then(|g| crate::gallery::latest_change(g, &st_dir)));
     let view = |it: &Item| -> View {
         let mut it = it.clone();
@@ -359,6 +398,7 @@ pub fn build(site: &Site, opts: &BuildOptions) -> Result<BuildReport> {
             html: body,
             project_title: pt,
             project_url: pu,
+            works_with: works_with(it),
         }
     };
     let views: Vec<View> = items.iter().map(view).collect();

@@ -1,0 +1,23 @@
+{#- "Works with" on a tool page: the tools named in its `:works-with:` header attribute, each with
+    why the two go together. Included by tool.html; a site's own tool.html can include it too:
+    {% include "tool_works_with.html" %} -#}
+{% if item.works_with %}
+<section class="works-with" aria-labelledby="works-with-h">
+  <h2 id="works-with-h">Works with</h2>
+  <ul>
+    {% for w in item.works_with %}
+    <li><a href="{{ w.url }}"><span class="ww-title">{{ w.title }}</span>{% if w.category %} <span class="ww-cat">{{ w.category }}</span>{% endif %}</a><span class="ww-why">{{ w.reason }}</span></li>
+    {% endfor %}
+  </ul>
+</section>
+<style>
+.works-with { margin: 1.5rem 0 .8rem; }
+.works-with h2 { font-size: 1rem; font-weight: 650; color: var(--muted); margin: 0 0 .6rem; letter-spacing: 0; }
+.works-with ul { list-style: none; margin: 0; padding: 0; display: grid; gap: .6rem; grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); }
+.works-with li { display: flex; flex-direction: column; gap: .2rem; padding: .65rem .9rem; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); min-width: 0; }
+.works-with a { display: flex; flex-wrap: wrap; align-items: baseline; gap: .2rem .5rem; text-decoration: none; color: var(--ink); font-weight: 650; }
+.works-with a:hover .ww-title { color: var(--link); text-decoration: underline; }
+.works-with .ww-cat { font-size: .75rem; font-weight: 500; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 0 .5rem; white-space: nowrap; }
+.works-with .ww-why { color: var(--muted); font-size: .9rem; line-height: 1.4; overflow-wrap: anywhere; }
+</style>
+{% endif %}

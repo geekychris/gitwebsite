@@ -795,7 +795,21 @@ fn main() -> Result<()> {
                 println!("ok");
                 return Ok(());
             }
-            v
+            // Errors fail the check (exit status 1); warnings alone do not.
+            let failed = v["errors"].as_array().is_some_and(|e| !e.is_empty());
+            if j {
+                print(true, &v);
+            } else {
+                for (sev, key) in [("error", "errors"), ("warning", "warnings")] {
+                    for p in v[key].as_array().into_iter().flatten() {
+                        println!("{sev}: {}", p.as_str().unwrap_or(""));
+                    }
+                }
+            }
+            if failed {
+                std::process::exit(1);
+            }
+            return Ok(());
         }
         Cmd::List { kind, area, tag, drafts } => ops::list(&site, &ops::ListArgs { kind, area, tag, drafts_only: drafts })?,
         Cmd::Show { id } => {
