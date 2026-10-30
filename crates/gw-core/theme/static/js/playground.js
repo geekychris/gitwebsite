@@ -1125,7 +1125,8 @@ async function run(code) {
 .playground-ui .pg-caption { font: .75rem var(--sans); color: var(--faint); }
 .playground-ui form.pg-input { display: flex; align-items: center; gap: .4rem; margin: .2rem 0; flex-wrap: wrap; }
 .playground-ui img.pg-img { display: block; max-width: 100%; height: auto; margin: .4rem 0; background: #fff; border-radius: 4px; }
-.playground-ui canvas.pg-glsl { display: block; width: 100%; aspect-ratio: 16 / 9; max-height: 420px; background: #000; border-top: 1px solid var(--line); touch-action: none; }
+.playground-ui .pg-out:has(> iframe.pg-html, > canvas.pg-glsl) { max-height: none; }
+.playground-ui canvas.pg-glsl { display: block; width: 100%; aspect-ratio: 16 / 9; max-height: min(70vh, 560px); background: #000; border-top: 1px solid var(--line); touch-action: none; }
 .playground-ui form.pg-input input { font: .86rem var(--mono); padding: .2rem .45rem; border: 1px solid var(--accent); border-radius: 5px; background: var(--bg); color: var(--ink); min-width: 8rem; }
 `;
   let styled = false;
