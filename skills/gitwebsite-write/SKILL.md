@@ -22,8 +22,13 @@ the user reviews before anything is released or published (see `gitwebsite-publi
 | `project` | long-running work, software or physical | `content/projects/slug/index.adoc` | `/projects/slug/` |
 | `update` | a dated progress post on a project (`--project slug`) | `content/projects/slug/updates/` | `/projects/slug/u/` |
 | `app` | a publicly running app, shown in the Lab (`--url`) | `content/lab/apps/` | `/lab/apps/slug/` |
-| `playground` | runnable code to edit in the browser | `content/lab/playground/` | `/lab/playground/slug/` |
+| `playground` | runnable code to edit in the browser (`content/lab/sketches/` for visual sketches, `content/lab/rosetta/` for one program in many languages) | `content/lab/playground/` | `/lab/playground/slug/` |
+| `exploration` | a dated Lab narrative that teaches by running things — live tool views and playgrounds (`:series:` + `:series-order:` for prev/next) | `content/lab/explorations/` | `/lab/explorations/slug/` |
 | `page` | standalone pages (About) | `content/pages/` | `/slug/` |
+
+Tools vs Lab: `/tools/` is for getting a job done; the Lab (`/lab/`) is for exploring and learning by
+running things. A tool that is mostly a sandbox or notebook can also appear on the Lab page with
+`:lab: true` (it stays at `/tools/<slug>/`).
 
 Areas: run `gw areas` [`list_areas`]. An item can sit in **several** areas (e.g. a jig
 printed for the bandsaw: `making/woodworking, making/3d-printing`). Use existing areas; if
@@ -41,6 +46,7 @@ first: `gw registry list`, `gw idea list` [`list_registry`, `list_ideas`].
 gw new article "Building a crosscut sled" --area woodworking --tag jig --summary "One line."
 gw new update "Phase 2: the enclosure" --project weather-station --area electronics
 gw new app "boingtrace" --url https://... --area amiga
+gw new exploration "Replication by hand" --area data   # content/lab/explorations/
 gw new article "Shop photos" --bundle     # directory form, so images sit beside index.adoc
 ```
 
@@ -53,12 +59,22 @@ Header (one attribute per line, then a blank line):
 `:type:` · `:date: YYYY-MM-DD` · `:areas:` · `:tags:` · `:project:` · `:summary:` (one line, used on
 cards and feeds) · `:hero: media:key` · `:status: draft` · `:repo:` · `:url:` / `:embed: true` (apps)
 · `:source: <registry id>` (provenance) · `:featured: true` · `:pinned: 1` (top of the home page;
-the number orders pins).
+the number orders pins) · `:redirect-from: /old/path/, /older/` (when a page moves: the build writes
+redirects there; `gw check` errors if one is a real page).
 
 - Images: `image::media:key[Alt text]` (library media), `image::photo.jpg[Alt]` (file beside a
   bundle's `index.adoc`), `image::https://…[Alt]`. Video: `video::media:key[]`.
-- Runnable code: `[source.playground,javascript]` (or `python`, `html`) on a `----` block — readers
-  can edit and run it.
+- Runnable code: `[source.playground,<lang>]` on a `----` block — readers can edit and run it.
+  Languages: `javascript`, `python`, `c`, `cpp`, `lua`, `ruby`, `sql`, `duckdb`, `prolog`, `scheme`,
+  `basic`, `r`, `php`, `perl`, `ocaml`, `fortran`, `clojure`, `bqn`, `forth`, `brainfuck`, `befunge`,
+  `html`, `p5` (a p5.js sketch), `glsl` (a fragment shader: `u_time`/`u_resolution`/`u_mouse` or
+  Shadertoy `mainImage`); `rust`, `go`, `kotlin` compile on their official online playgrounds, so
+  add `:network: true`. Details per language: docs/authoring.adoc § Code playgrounds.
+- Live tool view (any page, a line of its own): `tool::<slug>[query="example=<preset>", tab=<tab>,
+  height=520, caption="…"]` — a lazy iframe of the tool in bare mode plus *Open full tool →*. Get
+  slugs, `presets` and `tabs` from `gw tools list` / `tools_list`; `gw check` errors on an unknown
+  tool or `example=`. Write `query` already URL-encoded (passed through as is); a preset may pick
+  its own tab over `tab=`, so check the result. Explorations should be built around these.
 - Normal code: `[source,rust]`. Sections with `==`. Cross-link with `link:/projects/x/[text]`.
 
 ## 5. Voice

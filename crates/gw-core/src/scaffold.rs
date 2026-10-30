@@ -40,6 +40,7 @@ pub fn path_for(site: &Site, n: &NewItem) -> Result<PathBuf> {
         Kind::App => c.join("lab/apps"),
         Kind::Playground => c.join("lab/playground"),
         Kind::Tool => c.join("tools"),
+        Kind::Exploration => c.join("lab/explorations"),
     };
     Ok(if n.bundle || n.kind == Kind::Project {
         base.join(&slug).join("index.adoc")
@@ -86,6 +87,10 @@ pub fn create(site: &Site, n: &NewItem) -> Result<PathBuf> {
         Kind::App => "What the app does and how to use it.\n\n== How it works\n".into(),
         Kind::Playground => "What this playground shows.\n\n[source.playground,javascript]\n----\nconsole.log('Edit me and press Run');\n----\n".into(),
         Kind::Tool => "How to use the tool. The tool itself is static/tools/<slug>.js; set :tool: and :category:.\n".into(),
+        Kind::Exploration => "The question this exploration asks, and what to watch for.\n\n\
+// A live tool view: tool::<slug>[query=\"example=…\", tab=…, height=520, caption=\"…\"]\n\
+// Runnable code: [source.playground,python] on a ---- block.\n\n\
+== Try it\n\n== What happened, and why\n".into(),
         _ => "Start writing here.\n".into(),
     });
     std::fs::create_dir_all(path.parent().unwrap())?;

@@ -100,13 +100,17 @@ impl Site {
     }
 
     /// [`Site::check`] by severity: errors are references that cannot work (a `:works-with:`
-    /// naming no tool, a malformed entry); everything else is a warning.
+    /// naming no tool, a malformed entry; a `tool::` block naming no tool or an `example=` its
+    /// tool does not declare; a `:redirect-from:` path that is already a page); everything else
+    /// is a warning.
     pub fn check_report(&self) -> Result<CheckReport> {
         let items = self.items()?;
         let media = self.media()?;
         let reg = self.registry()?;
         let mut problems = vec![];
         let projects: Vec<&str> = items.iter().filter(|i| i.kind == Kind::Project).map(|i| i.slug.as_str()).collect();
+        let tool_catalog = self.tool_catalog(&items);
+        let mut errors = redirect_problems(&self.config, &items);
         for it in &items {
             for a in &it.areas {
                 if self.config.resolve_area(a).is_none() {
@@ -124,12 +128,21 @@ impl Site {
             if it.kind.is_post() && it.date.is_none() {
                 problems.push(format!("{}: posts need a :date:", it.id));
             }
+            if it.kind == Kind::Exploration && it.date.is_none() {
+                problems.push(format!("{}: explorations need a :date: (the Lab lists them newest first)", it.id));
+            }
+            if it.attrs.contains_key("lab") && it.kind != Kind::Tool {
+                problems.push(format!("{}: :lab: only lists tool pages on the Lab page", it.id));
+            }
             if let Some(src) = &it.source {
                 if !src.starts_with("repo:") && reg.get(src).is_none() {
                     problems.push(format!("{}: :source: {src} is not in the registry", it.id));
                 }
             }
             let text = std::fs::read_to_string(&it.path)?;
+            let (e, w) = crate::toolembed::problems(&text, &tool_catalog);
+            errors.extend(e.into_iter().map(|p| format!("{}: {p}", it.id)));
+            problems.extend(w.into_iter().map(|p| format!("{}: {p}", it.id)));
             let models = crate::model::expand(&text, &crate::model::Env {
                 lib: Some(&media),
                 bundle_dir: it.bundle_dir.as_deref(),
@@ -146,10 +159,61 @@ impl Site {
         }
         problems.extend(crate::gallery::check(&self.root, &self.static_dir(), &media));
         problems.extend(crate::codecat::check(&self.root, &self.static_dir()));
-        let (errors, ww_warnings) = works_with_problems(&items);
+        let (ww_errors, ww_warnings) = works_with_problems(&items);
+        errors.extend(ww_errors);
         problems.extend(ww_warnings);
         Ok(CheckReport { errors, warnings: problems })
     }
+
+    /// The site's tools by slug, read from their pages as the tool catalogue reads them (their
+    /// `?example=` presets and `#` tabs; see [`crate::toolcat`]), drafts included.
+    pub fn tool_catalog(&self, items: &[Item]) -> std::collections::BTreeMap<String, crate::toolcat::Tool> {
+        items
+            .iter()
+            .filter(|i| i.kind == Kind::Tool)
+            .map(|i| {
+                let text = std::fs::read_to_string(&i.path).unwrap_or_default();
+                // A page in content/tools/ without `:type: tool` is still a tool.
+                let text = if !i.attrs.contains_key("type") { text.replacen('\n', "\n:type: tool\n", 1) } else { text };
+                let t = crate::toolcat::parse(&i.slug, &text, &i.path)
+                    .unwrap_or_else(|| crate::toolcat::Tool { slug: i.slug.clone(), title: i.title.clone(), ..Default::default() });
+                (i.slug.clone(), t)
+            })
+            .collect()
+    }
+}
+
+/// Addresses the build writes besides the items' own pages (listings, area and tag pages).
+pub fn generated_urls(cfg: &SiteConfig, items: &[Item]) -> std::collections::BTreeSet<String> {
+    let mut urls: std::collections::BTreeSet<String> =
+        ["/", "/articles/", "/projects/", "/areas/", "/lab/", "/tools/", "/publications/", "/models/", "/code/"].iter().map(|s| s.to_string()).collect();
+    urls.extend(cfg.flat_areas().into_iter().map(|(p, _)| format!("/areas/{p}/")));
+    urls.extend(items.iter().flat_map(|i| i.tags.iter()).map(|t| format!("/tags/{}/", content::slugify(t))));
+    urls
+}
+
+/// `:redirect-from:` paths that would replace a real page — an item, a listing, an area or tag
+/// page, or another item's redirect — are errors (the redirect page would hide it).
+pub fn redirect_problems(cfg: &SiteConfig, items: &[Item]) -> Vec<String> {
+    let mut taken: std::collections::BTreeMap<String, String> = items.iter().map(|i| (i.url.clone(), format!("the page of {}", i.id))).collect();
+    for u in generated_urls(cfg, items) {
+        taken.entry(u.clone()).or_insert_with(|| format!("the generated page {u}"));
+    }
+    let mut errors = vec![];
+    for it in items {
+        for old in it.redirect_from() {
+            // `/x/` and `/x/index.html` are the same file.
+            let key = old.strip_suffix("index.html").unwrap_or(&old).to_string();
+            if key == it.url {
+                errors.push(format!("{}: :redirect-from: {old} is this page's own address", it.id));
+            } else if let Some(what) = taken.get(&key) {
+                errors.push(format!("{}: :redirect-from: {old} is already {what}", it.id));
+            } else {
+                taken.insert(key, format!("a redirect to {}", it.url));
+            }
+        }
+    }
+    errors
 }
 
 /// The result of [`Site::check_report`].

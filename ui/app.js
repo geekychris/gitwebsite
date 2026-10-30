@@ -139,7 +139,7 @@ async function areas() {
   if (!areasCache) areasCache = await get('/areas');
   return areasCache;
 }
-const KINDS = ['article', 'project', 'update', 'page', 'app', 'playground', 'tool'];
+const KINDS = ['article', 'project', 'update', 'page', 'app', 'playground', 'tool', 'exploration'];
 
 function statusPill(it) {
   if (it.draft) return '<span class="pill draft">draft</span>';
@@ -154,7 +154,7 @@ const contentFilter = { kind: '', area: '', status: '', q: '' };
 async function viewContent() {
   const [items, ar] = await Promise.all([get('/items'), areas()]);
   main.innerHTML = `
-    <h1>Content</h1><p class="sub">Articles, projects and their updates, pages, apps, playgrounds, and tools.</p>
+    <h1>Content</h1><p class="sub">Articles, projects and their updates, pages, apps, playgrounds, tools, and Lab explorations.</p>
     <div class="bar">
       <input type="search" placeholder="Filter by title…" data-f="q" value="${esc(contentFilter.q)}">
       <select data-f="kind"><option value="">All kinds</option>${KINDS.map(k => `<option ${contentFilter.kind === k ? 'selected' : ''}>${k}</option>`).join('')}</select>

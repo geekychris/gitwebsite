@@ -11,6 +11,7 @@ pub const TEMPLATES: &[(&str, &str)] = &[
     ("area.html", include_str!("../theme/templates/area.html")),
     ("areas.html", include_str!("../theme/templates/areas.html")),
     ("article.html", include_str!("../theme/templates/article.html")),
+    ("exploration.html", include_str!("../theme/templates/exploration.html")),
     ("code.html", include_str!("../theme/templates/code.html")),
     ("code_project.html", include_str!("../theme/templates/code_project.html")),
     ("base.html", include_str!("../theme/templates/base.html")),

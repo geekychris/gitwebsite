@@ -2,7 +2,7 @@
 //!
 //! ```asciidoc
 //! = Title
-//! :type: article            // page | article | project | update | app | playground
+//! :type: article            // page | article | project | update | app | playground | tool | exploration
 //! :date: 2026-10-09
 //! :areas: making/woodworking, 3d-printing
 //! :tags: jig, walnut
@@ -19,13 +19,18 @@
 //! :featured: true
 //! :pinned: 1               // home page: pinned at the top (optional number orders the pins)
 //! :works-with: graph: plots the fitted curve; units: converts the inputs   // tools only
+//! :lab: true                // tools: listed on the Lab page too
+//! :series: Consistency      // explorations: prev/next within the series (`:series-order: 2` orders it)
+//! :redirect-from: /old/path/, /older/   // old addresses that send readers here
 //! ```
 //!
 //! Where an item lives decides its kind and URL when `:type:` is absent:
 //! `content/pages/about.adoc` → `/about/`, `content/articles/x.adoc` → `/articles/x/`,
 //! `content/projects/p/index.adoc` → `/projects/p/`,
 //! `content/projects/p/updates/u.adoc` → `/projects/p/u/`,
-//! `content/lab/apps/a.adoc` → `/lab/apps/a/`, `content/lab/playground/x.adoc` → `/lab/playground/x/`,
+//! `content/lab/apps/a.adoc` → `/lab/apps/a/`, `content/lab/playground/x.adoc` → `/lab/playground/x/`
+//! (`content/lab/sketches/` and `content/lab/rosetta/` are playgrounds too, at `/lab/sketches/x/` and
+//! `/lab/rosetta/x/`), `content/lab/explorations/e.adoc` → `/lab/explorations/e/`,
 //! `content/tools/t.adoc` → `/tools/t/` (`:tool:` names the script, `:category:` groups it).
 //! A directory holding `index.adoc` is a bundle: its other files are copied beside the page.
 
@@ -47,6 +52,9 @@ pub enum Kind {
     Playground,
     /// An interactive client-side tool (calculator, encoder, DNS lookup...) under /tools/.
     Tool,
+    /// A Lab narrative that learns by running things: prose around live tool views (`tool::`)
+    /// and playgrounds, under /lab/explorations/.
+    Exploration,
 }
 
 impl Kind {
@@ -59,6 +67,7 @@ impl Kind {
             "app" => Kind::App,
             "playground" | "code" => Kind::Playground,
             "tool" => Kind::Tool,
+            "exploration" => Kind::Exploration,
             _ => return None,
         })
     }
@@ -71,12 +80,15 @@ impl Kind {
             Kind::App => "app",
             Kind::Playground => "playground",
             Kind::Tool => "tool",
+            Kind::Exploration => "exploration",
         }
     }
     /// Posts are the dated stream: articles and project updates.
     pub fn is_post(&self) -> bool {
         matches!(self, Kind::Article | Kind::Update)
     }
+    /// Every kind, in the order pickers show them.
+    pub const ALL: [Kind; 8] = [Kind::Article, Kind::Project, Kind::Update, Kind::Page, Kind::App, Kind::Playground, Kind::Tool, Kind::Exploration];
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -126,6 +138,29 @@ impl Item {
     pub fn works_with(&self) -> Vec<Result<WorksWith, String>> {
         self.attrs.get("works-with").map(|s| parse_works_with(s)).unwrap_or_default()
     }
+    /// `:redirect-from: /old/path/, articles/older` — earlier addresses of this page, each as a
+    /// site path with a leading `/` (and a trailing `/` unless it names a file, e.g. `x.html`).
+    pub fn redirect_from(&self) -> Vec<String> {
+        list(self.attrs.get("redirect-from")).iter().map(|p| redirect_path(p)).filter(|p| p != "/").collect()
+    }
+    /// `:lab: true` on a tool page: listed on the Lab page as well as under /tools/.
+    pub fn in_lab(&self) -> bool {
+        truthy(self.attrs.get("lab"))
+    }
+}
+
+/// `old/path` or `https://site/old/path` → `/old/path/`; a last segment with a dot is a file
+/// (`/old.html`) and gets no trailing slash. Queries and fragments are dropped.
+pub fn redirect_path(p: &str) -> String {
+    let p = p.trim();
+    let p = p.split_once("://").map(|(_, rest)| rest.find('/').map(|i| &rest[i..]).unwrap_or("/")).unwrap_or(p);
+    let p = p.split(['?', '#']).next().unwrap_or("");
+    let segs: Vec<&str> = p.split('/').filter(|s| !s.is_empty() && *s != "." && *s != "..").collect();
+    let mut out = format!("/{}", segs.join("/"));
+    if !segs.is_empty() && !segs.last().unwrap().contains('.') {
+        out.push('/');
+    }
+    out
 }
 
 /// One `:works-with:` entry on a tool page: another tool (by slug) and why they go together.
@@ -255,7 +290,8 @@ pub fn load_item(path: &Path, rel: &Path) -> Result<Item> {
         Some("projects") if stem_comps.len() >= 4 && stem_comps[2] == "updates" => Kind::Update,
         Some("projects") => Kind::Project,
         Some("lab") if stem_comps.get(1).map(|s| s.as_str()) == Some("apps") => Kind::App,
-        Some("lab") if stem_comps.get(1).map(|s| s.as_str()) == Some("playground") => Kind::Playground,
+        Some("lab") if matches!(stem_comps.get(1).map(|s| s.as_str()), Some("playground" | "sketches" | "rosetta")) => Kind::Playground,
+        Some("lab") if stem_comps.get(1).map(|s| s.as_str()) == Some("explorations") => Kind::Exploration,
         Some("tools") => Kind::Tool,
         _ => Kind::Article,
     };
@@ -273,8 +309,13 @@ pub fn load_item(path: &Path, rel: &Path) -> Result<Item> {
         Kind::Project => format!("/projects/{slug}/"),
         Kind::Update => format!("/projects/{}/{slug}/", project.clone().unwrap_or_default()),
         Kind::App => format!("/lab/apps/{slug}/"),
-        Kind::Playground => format!("/lab/playground/{slug}/"),
+        // Sketches and Rosetta pages keep their own folder in the address.
+        Kind::Playground => match (stem_comps.first().map(|s| s.as_str()), stem_comps.get(1).map(|s| s.as_str())) {
+            (Some("lab"), Some(f @ ("sketches" | "rosetta"))) if stem_comps.len() > 2 => format!("/lab/{f}/{slug}/"),
+            _ => format!("/lab/playground/{slug}/"),
+        },
         Kind::Tool => format!("/tools/{slug}/"),
+        Kind::Exploration => format!("/lab/explorations/{slug}/"),
     };
     let status = attrs.get("status").map(|s| s.to_ascii_lowercase()).unwrap_or_else(|| "published".into());
     if !matches!(status.as_str(), "draft" | "published") {
@@ -362,6 +403,27 @@ mod tests {
         let it = Item { attrs, ..test_item() };
         assert_eq!(it.works_with(), vec![ok("a", "one: two"), ok("b", "three")]);
         assert_eq!(test_item().works_with(), vec![]);
+    }
+
+    #[test]
+    fn lab_kinds_and_addresses() {
+        let dir = std::env::temp_dir().join(format!("gw-lab-kinds-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("x.adoc");
+        std::fs::write(&f, "= X\n:redirect-from: old/x, https://example.org/older/page.html?a=1, /\n:lab: true\n\nBody.\n").unwrap();
+        let at = |rel: &str| load_item(&f, Path::new(rel)).unwrap();
+        let e = at("lab/explorations/raft-by-hand.adoc");
+        assert_eq!((e.kind, e.url.as_str()), (Kind::Exploration, "/lab/explorations/raft-by-hand/"));
+        assert_eq!(e.redirect_from(), vec!["/old/x/", "/older/page.html"]);
+        assert_eq!((at("lab/sketches/waves.adoc").kind, at("lab/sketches/waves.adoc").url.as_str()), (Kind::Playground, "/lab/sketches/waves/"));
+        assert_eq!(at("lab/rosetta/fizzbuzz.adoc").url, "/lab/rosetta/fizzbuzz/");
+        assert_eq!(at("lab/playground/lua.adoc").url, "/lab/playground/lua/");
+        assert!(at("tools/t.adoc").in_lab());
+        assert_eq!(Kind::parse("Exploration"), Some(Kind::Exploration));
+        assert_eq!(Kind::Exploration.as_str(), "exploration");
+        assert!(Kind::ALL.iter().all(|k| Kind::parse(k.as_str()) == Some(*k)));
+        assert_eq!(redirect_path("a/./../b/"), "/a/b/");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     fn test_item() -> Item {

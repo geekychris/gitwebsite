@@ -53,7 +53,7 @@ enum Cmd {
     Show { id: String },
     /// Create a draft: gw new article "Title" --area woodworking
     New {
-        /// page | article | project | update | app | playground | tool
+        /// page | article | project | update | app | playground | tool | exploration
         kind: String,
         title: String,
         #[arg(long = "area")]

@@ -10,7 +10,8 @@ are about.
   MCP server for Claude and other AI assistants, and a native desktop app (Tauri).
 * *An information architecture you edit as data*: overlapping areas you define in `site.yaml`,
   and kinds of content — articles, projects with dated updates, standing pages, live apps, and
-  code playgrounds that run in the browser.
+  code playgrounds that run in the browser, and Lab explorations built around live tool views
+  (`tool::kafka-sim[query="example=wal"]` embeds a tool in any page).
 * *A projects page grouped by area*, with filter buttons that find every project in an area.
 * *A default theme built in*: a new site needs no templates; override any one you like.
 * *A provenance registry* of where everything came from (books, imported posts, photo albums,

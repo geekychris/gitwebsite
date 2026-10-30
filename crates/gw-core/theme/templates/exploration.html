@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% import "macros.html" as m %}
+{% block description %}{{ item.summary | default(value=site.description) }}{% endblock %}
+{% block og %}<meta property="og:type" content="article">{% if item.hero_url %}<meta property="og:image" content="{{ item.hero_url | safe }}">{% endif %}{% endblock %}
+{% block head %}<style>
+.xp-uses { display: flex; flex-wrap: wrap; align-items: baseline; gap: .35rem .5rem; margin: .2rem 0 .8rem; font-size: .9rem; color: var(--muted); }
+.xp-uses a { text-decoration: none; border: 1px solid var(--line); border-radius: 999px; padding: .08rem .6rem; background: var(--surface); color: var(--ink); }
+.xp-uses a:hover { border-color: var(--accent); }
+.xp-series { font-size: .9rem; color: var(--muted); margin: 0 0 .5rem; }
+.xp-nav { display: grid; grid-template-columns: 1fr 1fr; gap: .8rem; margin: 2.4rem 0 0; }
+.xp-nav a { display: block; padding: .8rem 1rem; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); text-decoration: none; color: var(--ink); }
+.xp-nav a:hover { border-color: var(--accent); }
+.xp-nav small { display: block; color: var(--muted); font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; }
+.xp-nav .next { grid-column: 2; text-align: right; }
+@media (max-width: 560px) { .xp-nav { grid-template-columns: 1fr; } .xp-nav .next { grid-column: 1; } }
+</style>{% endblock %}
+{% block main %}
+<article class="wrap narrow doc exploration">
+  <header class="doc-head">
+    <p class="eyebrow"><a href="/lab/">Lab</a> · Exploration</p>
+    <h1>{{ item.title }}</h1>
+    {% if item.summary %}<p class="lede">{{ item.summary }}</p>{% endif %}
+    {% if series %}<p class="xp-series">Part {{ series.part }} of {{ series.count }} in <strong>{{ series.name }}</strong></p>{% endif %}
+    <p class="meta">{% if item.date_human %}<time datetime="{{ item.date_iso }}">{{ item.date_human }}</time> · {% endif %}{{ item.reading_minutes }} min read
+      {% if item.updated_human %} · updated {{ item.updated_human }}{% endif %}
+      {% if item.repo %} · <a href="{{ item.repo }}">source</a>{% endif %}</p>
+    {% if item.uses_tools %}<p class="xp-uses"><span>Uses</span>{% for t in item.uses_tools %}<a href="{{ t.url }}">{{ t.title }}</a>{% endfor %}</p>{% endif %}
+    {% if item.area_links %}<p class="chips">{% for a in item.area_links %}<a class="chip" href="{{ a.url }}">{{ a.title }}</a>{% endfor %}</p>{% endif %}
+  </header>
+  {% if item.hero_url and not item.hero_in_body %}<figure class="doc-hero"><img src="{{ item.hero_url | safe }}" alt=""></figure>{% endif %}
+  <div class="prose">{{ item.html | safe }}</div>
+  {% if item.tags %}<p class="tags">{% for t in item.tags %}<a href="/tags/{{ t | slugify }}/">#{{ t }}</a>{% endfor %}</p>{% endif %}
+  {% if series and (series.prev or series.next) %}
+  <nav class="xp-nav" aria-label="{{ series.name }}">
+    {% if series.prev %}<a class="prev" href="{{ series.prev.url }}" rel="prev"><small>← Previous</small>{{ series.prev.title }}</a>{% endif %}
+    {% if series.next %}<a class="next" href="{{ series.next.url }}" rel="next"><small>Next →</small>{{ series.next.title }}</a>{% endif %}
+  </nav>
+  {% endif %}
+</article>
+{% endblock %}

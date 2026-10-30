@@ -12,5 +12,5 @@ pub mod server;
 pub mod server_companion;
 pub mod setup;
 pub mod stories;
-pub mod toolcat;
+pub use gw_core::toolcat;
 pub mod enhance;
