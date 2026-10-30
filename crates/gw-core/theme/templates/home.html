@@ -64,10 +64,11 @@
 </section>
 {% endif %}
 
-{% if apps %}
+{% if explorations or apps %}
 <section class="wrap block">
-  <div class="section-head"><h2 class="section-title">Lab</h2><a href="/lab/">Apps and playgrounds →</a></div>
-  <div class="grid">{% for v in apps %}{{ m::card(v=v) }}{% endfor %}</div>
+  <div class="section-head"><h2 class="section-title">Lab</h2><a href="/lab/">Explore the Lab →</a></div>
+  <p class="meta">Learn by running things: explorations around live simulations, code to edit and run, and apps.</p>
+  <div class="grid">{% for v in explorations | slice(end=3) %}{{ m::card(v=v) }}{% endfor %}{% for v in apps | slice(end=3) %}{{ m::card(v=v) }}{% endfor %}</div>
 </section>
 {% endif %}
 {% endblock %}

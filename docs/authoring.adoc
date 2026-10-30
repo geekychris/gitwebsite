@@ -23,8 +23,8 @@ All content is AsciiDoc. A post is a header, a blank line, and the body.
 |===
 | Attribute | Meaning
 
-| `:type:` | `article`, `project`, `update`, `app`, `playground`, `page`. Optional: inferred from the folder.
-| `:date:` | `YYYY-MM-DD`. Required for posts (articles and updates).
+| `:type:` | `article`, `project`, `update`, `app`, `playground`, `tool`, `exploration`, `page`. Optional: inferred from the folder.
+| `:date:` | `YYYY-MM-DD`. Required for posts (articles and updates) and explorations.
 | `:updated:` | Date of a significant revision; shown beside the date.
 | `:areas:` | Comma-separated areas (`gw areas` lists them). See <<information-architecture.adoc#,Information architecture>>.
 | `:tags:` | Comma-separated free-form tags.
@@ -42,6 +42,9 @@ All content is AsciiDoc. A post is a header, a blank line, and the body.
 | `:source:` | Registry id this content came from (imports set this).
 | `:slug:` | Override the URL slug (default: from the file name).
 | `:works-with:` | Tools: other tools this one is used together with, each with a reason — see <<works-with>>.
+| `:lab:` | Tools: `true` also lists the tool on the Lab page, under *Notebooks and sandboxes in Tools* (it stays at `/tools/<slug>/`).
+| `:series:` | Explorations: the series this one belongs to; its page links the previous and next part. `:series-order:` (a number) orders the parts; otherwise by date.
+| `:redirect-from:` | Earlier addresses of this page, comma-separated (`/articles/old-name/, /old.html`) — see <<redirects>>.
 |===
 
 Create items with the CLI rather than by hand — it puts files in the right place and
@@ -54,6 +57,7 @@ gw new project "Workbench" --area woodworking --area cnc
 gw new update "Router sled" --project workbench --bundle
 gw new app "boingtrace" --area amiga --url https://example.org/boingtrace
 gw new playground "Bezier curves" --area engineering
+gw new exploration "Replication by hand" --area data
 gw release articles/why-my-first-jig-failed      # mark published
 ----
 
@@ -176,14 +180,111 @@ Languages (the runtime for each loads from jsDelivr the first time a reader pres
 | `scheme` | BiwaScheme.
 | `basic` | The site's own classic BASIC (`static/js/playground-basic.js`); `INPUT` shows a box in the output.
 | `rust`, `go` | Sent to play.rust-lang.org / go.dev to compile — add `:network: true` to the page.
+| `kotlin` (`kt`) | Sent to JetBrains' Kotlin Playground service (api.kotlinlang.org, latest stable compiler) — add `:network: true` to the page.
 | `html` | A sandboxed frame — good for canvas demos.
+| `r` | R via webR (~20 MB first use). The last value of each top-level line is printed as in the console; base-graphics plots (`plot()`, `hist()`…) appear as images below the output; messages, warnings and errors are shown as R prints them.
+| `php` | PHP 8.4 (php-wasm, ~12 MB first use), a fresh interpreter per run. The leading `<?php` is optional.
+| `perl` | Perl 5 (zeroperl, WASI WebAssembly, ~25 MB first use) with its core modules.
+| `ocaml` (`ml`) | The OCaml 5 toplevel compiled with js_of_ocaml (@live-codes/ocaml, ~5 MB). `read_line` reads *stdin*; an expression-only snippet shows the toplevel's `val x : int = …`.
+| `fortran` (`f90`) | LFortran's LLVM backend compiled to WebAssembly (@live-codes/lfortran-wasm, ~18 MB first use). `read *` reads *stdin*.
+| `clojure` (`clj`) | Scittle, the Small Clojure Interpreter (ClojureScript semantics: JavaScript numbers, no `*'`). The value of the last form is shown as `=> …`.
+| `bqn` | The BQN reference implementation in JavaScript (from mlochbaum/BQN via jsDelivr). The program's result is printed; `•Show` and `•Out` print along the way.
+| `forth` | A small ANS-style Forth in `playground.js`: the core stack, arithmetic and memory words, `: ;`, `IF ELSE THEN`, `DO LOOP +LOOP ?DO LEAVE I J`, `BEGIN UNTIL AGAIN WHILE REPEAT`, `VARIABLE CONSTANT VALUE TO CREATE , ALLOT`, `." S" TYPE EMIT`, `HEX DECIMAL`, `' EXECUTE`, `RECURSE`. A fresh system per run; the stack left over is shown.
+| `brainfuck` (`bf`) | A 30 000-cell byte tape; `,` reads *stdin* (0 at its end).
+| `befunge` | Befunge-93 on its 80×25 playfield; `&` and `~` read *stdin* (−1 at its end).
+| `p5` | A p5.js 1.11 sketch (global mode: `setup()`, `draw()`) in a sandboxed frame; `console.log` and errors appear below it.
+| `glsl` | A fragment shader drawn over a canvas with WebGL: `u_time`, `u_resolution`, `u_mouse` (pixels, origin bottom left), or Shadertoy's `mainImage()` with `iTime`, `iResolution`, `iMouse` — undeclared uniforms are declared for you, and `precision` is added. `#version 300 es` works too (declare your own `out vec4`). Compile errors are shown with the snippet's own line numbers; *Stop* ends the animation.
 |===
 
-Every language except HTML, DuckDB, Rust, and Go runs in a Web Worker, so readers can press
-*Stop* (or Escape) to end an infinite loop. C, C++, and Python blocks get a *stdin* button. The
+Every language except HTML, p5.js, GLSL, DuckDB, Rust, Go, and Kotlin runs in a Web Worker, so
+readers can press *Stop* (or Escape) to end an infinite loop. C, C++, Python, OCaml, Fortran,
+Brainfuck, and Befunge blocks get a *stdin* button. Rust, Go, and Kotlin are the only languages
+that send code anywhere (to their official playground services); every other runtime downloads
+once from jsDelivr and then runs in the reader's browser. The
 runtime is `static/js/playground.js`, loaded by `site.js` only on pages that contain a
 playground; the `/tools/sandbox/` page uses the same runtime with a language picker.
 Playgrounds work in any kind of page, but collections of them belong in `content/lab/playground/`.
+
+== The Lab
+
+`/lab/` is for exploring — learning by running things — where `/tools/` is for getting a job
+done. The Lab page has these sections, in order (an empty one is left out):
+
+[cols="1,3",options="header"]
+|===
+| Section | What goes in it
+
+| Explorations | `content/lab/explorations/<slug>.adoc` (kind `exploration`), newest first.
+| Playgrounds | Playground pages (`content/lab/playground/`), with a button per language to filter them; each card lists its languages (from its `[source.playground,<lang>]` blocks).
+| Sketches | Playground pages under `content/lab/sketches/` (`/lab/sketches/<slug>/`), or tagged `sketch` — shaders, `p5` drawings, canvas toys.
+| Rosetta | "Same program, many languages": playground pages under `content/lab/rosetta/` (`/lab/rosetta/<slug>/`).
+| Apps | App pages (`content/lab/apps/`).
+| Notebooks and sandboxes in Tools | Tool pages with `:lab: true`.
+|===
+
+=== Explorations
+
+An exploration is a narrative that teaches by running things: a question, live tool views and
+playgrounds to try, and what the results show. It is dated (`:date:` is required), appears in the
+feed, the sitemap, search and its areas, and its page shows *Lab · Exploration*, the reading time,
+the tools it uses (from its `tool::` blocks, linked), and — with `:series:` — *Previous* and *Next*
+within the series.
+
+[source,asciidoc]
+----
+= Replication by hand
+:date: 2026-10-20
+:areas: data
+:series: Distributed systems by hand
+:series-order: 2
+:summary: Kill a Kafka leader and watch what the followers do.
+
+tool::kafka-sim[query="example=unclean", tab=sim, height=560, caption="Kill the leader, then restart it"]
+----
+
+[[tool-views]]
+=== Live tool views: `tool::`
+
+Any page can show one of the site's tools, live, with the `tool::` block macro on a line of its own:
+
+[source,asciidoc]
+----
+tool::kafka-sim[query="example=wal", tab=sim, height=600, caption="The write-ahead log"]
+tool::graph[query="f=sin(x)*x"]
+----
+
+It becomes a lazy-loaded frame of `/tools/<slug>/?bare=1&embed=1&<query>#<tab>` — the tool in
+viewer mode, with no site header, footer or help, and (`embed=1`) using its settings in memory only,
+never the reader's saved ones, so the frame always shows exactly its query or the defaults — titled with the tool's name, with a *Loading…* placeholder
+until it paints, the caption (default: the tool's title), and *Open full tool →* to the normal page
+with the same query and tab.
+
+[cols="1,3"]
+|===
+| `query` | URL parameters for the tool (`example=wal`, `f=sin(x)`); a leading `?` is optional. Write it already URL-encoded: it is passed through unchanged, however long (quote it when it holds a comma). `tools_list` and `tool_info` (MCP, `gw tools list`) give each tool's parameters, `presets` and `tabs`.
+| `tab` | The tab to open (the `#` part). A tool's preset (`example=`) can choose its own tab, which may override `tab=` — check the result.
+| `height` | Frame height in pixels (default 520); on phones it is capped at 75% of the screen.
+| `caption` | The caption (or the first positional attribute).
+|===
+
+`gw check` reports a `tool::` naming no tool, and an `example=` that the tool does not list among
+its presets, as errors; a tab the tool does not list and an unknown attribute are warnings. The
+frame needs the tool page to support `?bare=1` (the default theme's `tool.html` does).
+
+[[redirects]]
+=== Redirects: `:redirect-from:`
+
+When a page moves (an article becomes an exploration, a slug changes), list its old addresses:
+
+[source,asciidoc]
+----
+:redirect-from: /articles/replication/, /old/replication.html
+----
+
+The build writes a small page at each one that sends readers on (a meta refresh, a canonical link
+and a plain link). Redirects are kept out of the sitemap, the feed and search. `gw check` reports
+an old address that is still a real page (another item, a listing, an area or tag page, or
+another redirect) as an error.
 
 == Apps
 

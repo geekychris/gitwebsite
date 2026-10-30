@@ -16,7 +16,7 @@ Change the YAML to change the ontology; no code changes are needed.
 | Projects | `/projects/` | Long-running work, each with its own timeline of updates; grouped by area (see <<Listing pages>>)
 | Areas | `/areas/` | The ontology: browse by subject
 | Tools | `/tools/` | Developer tools that run in the browser — calculators, encoders, data, hashes, time, and network tools — grouped by category
-| Lab | `/lab/` | Public apps, and code playgrounds that run in the browser
+| Lab | `/lab/` | Exploring by running things: explorations, playgrounds by language, sketches, Rosetta pages, apps, and tools marked `:lab: true`
 | About | `/about/` | The author, professionally and personally
 | Publications | `/publications/` | Books and long documents, from the registry (entries of kind `publication`)
 | Tags | `/tags/<tag>/` | Fine-grained cross-cutting labels
@@ -37,7 +37,9 @@ template, and where it is listed.
 | `update` | A dated entry in a project's timeline | `content/projects/<project>/updates/<slug>.adoc` | `/projects/<project>/<slug>/`
 | `app` | A live app that is publicly exposed (link and optional embed) | `content/lab/apps/<slug>.adoc` | `/lab/apps/<slug>/`
 | `playground` | Code readers can edit and run in the browser | `content/lab/playground/<slug>.adoc` | `/lab/playground/<slug>/`
+| `playground` (sketches, Rosetta) | Visual experiments; one program in many languages | `content/lab/sketches/<slug>.adoc`, `content/lab/rosetta/<slug>.adoc` | `/lab/sketches/<slug>/`, `/lab/rosetta/<slug>/`
 | `tool` | An interactive browser tool (its UI is `static/tools/<slug>.js`) | `content/tools/<slug>.adoc` | `/tools/<slug>/`
+| `exploration` | A dated Lab narrative that teaches by running things: live tool views (`tool::`) and playgrounds | `content/lab/explorations/<slug>.adoc` | `/lab/explorations/<slug>/`
 | `page` | Standing pages (About, Uses, Contact) | `content/pages/<slug>.adoc` | `/<slug>/`
 |===
 

@@ -18,7 +18,7 @@ const SUPPORTED: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
 
 /// Content conventions, repeated in tool descriptions so a client can write correct posts.
 const CONVENTIONS: &str = "Content is AsciiDoc. A file starts with `= Title` then header attributes \
-(one per line, `:name: value`) until the first blank line: :type: (page|article|project|update|app|playground|tool), \
+(one per line, `:name: value`) until the first blank line: :type: (page|article|project|update|app|playground|tool|exploration), \
 :date: YYYY-MM-DD, :areas: comma-separated area paths or unique ids from list_areas (an item may sit in several), \
 :tags:, :project: <project slug> (for updates), :summary: one line for cards and feeds, :hero: media:<key> or \
 an image path/URL, :hero-crop: left, top, width, height (percent of the hero image that 16:9 cards show), :status: draft|published, :visibility: public|unlisted, :repo: URL, :url: (apps: where the app \
@@ -26,14 +26,18 @@ runs), :embed: true (apps: embed in an iframe), :source: <registry id>, :feature
 image::media:<key>[Alt text] for library media (add_media first), image::photo.jpg[] for files beside a bundle's \
 index.adoc, or image::https://...[] for external URLs; video::media:<key>[]; 3-D models: \
 model::media:<key>[Caption, download=true|false] (add_model first, from the Meshy models repository; or post_add_model / post_remove_model), and the whole models gallery: models::gallery[] (or models::gallery[project=<id>]). Runnable code: a block preceded by \
-[source.playground,javascript] (or python, html). New content is always created as a draft.";
+[source.playground,javascript] (or python, html, and the other ids in docs/authoring.adoc). Live tool view in any page: \
+tool::<slug>[query=\"example=<preset>\", tab=<tab>, height=520, caption=\"…\"] (slugs, presets and tabs from tools_list). \
+Explorations (:type: exploration, content/lab/explorations/) are Lab narratives built around tool:: views and playgrounds; \
+:series: <name> (+ :series-order: <n>) gives them prev/next. :redirect-from: /old/path/, /older/ on any item writes redirects \
+from old addresses. :lab: true on a tool page also lists it on the Lab page. New content is always created as a draft.";
 
 fn tools() -> Value {
     let s = |props: Value, req: &[&str]| json!({"type": "object", "properties": props, "required": req});
     let str_ = |d: &str| json!({"type": "string", "description": d});
     let arr = |d: &str| json!({"type": "array", "items": {"type": "string"}, "description": d});
-    let kinds = json!({"type": "string", "enum": ["page", "article", "project", "update", "app", "playground", "tool"],
-        "description": "page: standalone page (/slug/). article: dated post (/articles/slug/). project: long-running work with updates (/projects/slug/). update: dated post belonging to a project (needs project). app: a publicly running app in the Lab (needs url). playground: page of runnable code in the Lab. tool: an interactive browser tool at /tools/slug/ whose UI is site/static/tools/<slug>.js (header :tool: script name, :category: one of the tools.categories ids in site.yaml)."});
+    let kinds = json!({"type": "string", "enum": ["page", "article", "project", "update", "app", "playground", "tool", "exploration"],
+        "description": "page: standalone page (/slug/). article: dated post (/articles/slug/). project: long-running work with updates (/projects/slug/). update: dated post belonging to a project (needs project). app: a publicly running app in the Lab (needs url). playground: page of runnable code in the Lab. tool: an interactive browser tool at /tools/slug/ whose UI is site/static/tools/<slug>.js (header :tool: script name, :category: one of the tools.categories ids in site.yaml). exploration: a dated Lab narrative (/lab/explorations/slug/) that teaches by running things — tool:: live views and playgrounds."});
     let entry_schema = json!({"type": "object", "description": "Registry entry",
         "properties": {
             "id": str_("Stable id, e.g. pub-my-book or wordpress-123"),
@@ -83,7 +87,7 @@ fn tools() -> Value {
          "inputSchema": s(json!({"status": {"type": "string", "enum": ["idea", "planned", "drafting", "review", "published", "dropped"]}}), &[])},
         {"name": "add_idea", "description": "Record something worth writing up or building. Returns the new idea with its numeric id.",
          "inputSchema": s(json!({"title": str_("Short title"), "notes": str_("Notes"), "areas": arr("Area paths"),
-            "kind": str_("What it should become: article, project, update, app, playground, tool"),
+            "kind": str_("What it should become: article, project, update, app, playground, tool, exploration"),
             "source": str_("Where the material is: repo path, URL, SmugMug album")}), &["title"])},
         {"name": "update_idea", "description": "Change an idea's status, title, notes, linked content id, or areas.",
          "inputSchema": s(json!({"id": {"type": "integer"},

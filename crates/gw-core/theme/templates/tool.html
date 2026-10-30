@@ -1,6 +1,11 @@
 {% extends "base.html" %}
 {% block description %}{{ item.summary | default(value=site.description) }}{% endblock %}
 {% block body_class %}tool-page{% endblock %}
+{% block head %}<script>
+// ?bare=1: only the tool — no site header, footer, title or help (tool:: frames, viewer windows).
+try { if (/[?&]bare=(1|true)(&|$)/.test(location.search)) document.documentElement.classList.add('gw-bare'); } catch (e) {}
+</script>
+<style>html.gw-bare body > header.top, html.gw-bare body > footer.foot, html.gw-bare .tool-head > :not(.tool-actions), html.gw-bare .works-with, html.gw-bare .tool-help, html.gw-bare .tool-privacy { display: none; }</style>{% endblock %}
 {% block main %}
 <section class="wrap tool-wrap">
   <header class="tool-head">

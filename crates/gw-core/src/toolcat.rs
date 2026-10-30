@@ -43,7 +43,7 @@ pub struct Tool {
     /// Example links found on the page (site-relative, e.g. /tools/graph/?f=sin(x)).
     pub links: Vec<String>,
     /// Tools this one is used together with, and why (`:works-with:`; malformed entries left out).
-    pub works_with: Vec<gw_core::content::WorksWith>,
+    pub works_with: Vec<crate::content::WorksWith>,
     pub path: String,
 }
 
@@ -168,7 +168,7 @@ pub fn parse(slug: &str, text: &str, path: &Path) -> Option<Tool> {
         deeplink: attrs.get("deeplink").map(|v| v == "true").unwrap_or(false),
         network: attrs.get("network").map(|v| v == "true").unwrap_or(false),
         draft: attrs.get("status").map(|v| v == "draft").unwrap_or(false),
-        works_with: attrs.get("works-with").map(|s| gw_core::content::parse_works_with(s).into_iter().flatten().collect()).unwrap_or_default(),
+        works_with: attrs.get("works-with").map(|s| crate::content::parse_works_with(s).into_iter().flatten().collect()).unwrap_or_default(),
         path: path.display().to_string(),
         ..Default::default()
     };
@@ -361,7 +361,7 @@ fn cut(s: &str, n: usize) -> String {
 pub fn index_markdown(site_root: &Path, base_url: &str) -> Result<String> {
     let tools = load(site_root)?;
     let mut cats: Vec<(String, String)> = vec![];
-    if let Ok(site) = gw_core::Site::open(Some(site_root)) {
+    if let Ok(site) = crate::Site::open(Some(site_root)) {
         if let Some(c) = serde_json::to_value(&site.config).ok().and_then(|v| v["tools"]["categories"].as_array().cloned()) {
             for x in c {
                 cats.push((x["id"].as_str().unwrap_or("").into(), x["title"].as_str().unwrap_or("").into()));

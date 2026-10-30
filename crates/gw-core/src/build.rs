@@ -2,8 +2,11 @@
 //!
 //! Output pages:
 //! - one page per item at its URL (template by kind: `home`, `page`, `article`, `project`,
-//!   `app`, `playground`)
-//! - `/articles/`, `/projects/`, `/areas/` and `/areas/<path>/`, `/tags/<tag>/`, `/lab/`
+//!   `app`, `playground`, `tool`, `exploration`), and a redirect page at each of its
+//!   `:redirect-from:` paths (kept out of the sitemap, feed and search)
+//! - `/articles/`, `/projects/`, `/areas/` and `/areas/<path>/`, `/tags/<tag>/`, `/tools/`
+//! - `/lab/`: explorations, playgrounds by language, sketches, Rosetta pages, apps, and the tools
+//!   marked `:lab: true`
 //! - `/publications/` from registry entries of kind `publication`
 //! - `/models/<project>/<slug>/`: the 3-D models gallery's model pages, and `/models/`: its grid,
 //!   or — when a post has a `models::gallery[]` block — a redirect to that post (see [`crate::gallery`])
@@ -73,6 +76,96 @@ struct View {
     project_url: String,
     /// Tool pages: the tools named in `:works-with:` that are in this build, in the page's order.
     works_with: Vec<WorksWithLink>,
+    /// The tools the page shows with `tool::` blocks (in this build), in order of appearance.
+    uses_tools: Vec<ToolLink>,
+    /// The languages of the page's playground blocks, in order of appearance.
+    languages: Vec<Lang>,
+    /// Explorations: `:series:` and this page's place in it (1-based; 0 outside a series).
+    series: String,
+    series_part: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ToolLink {
+    slug: String,
+    url: String,
+    title: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+struct Lang {
+    id: String,
+    label: String,
+}
+
+/// The playground languages a page uses: the ids of its `[source.playground,<lang>]` blocks, with
+/// the aliases playground.js accepts folded together.
+fn playground_langs(text: &str) -> Vec<Lang> {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = RE.get_or_init(|| regex::Regex::new(r"(?m)^\[source[^,\]]*\bplayground\b[^,\]]*,\s*([A-Za-z0-9_+#-]+)").unwrap());
+    let mut out: Vec<Lang> = vec![];
+    for c in re.captures_iter(text) {
+        let (id, label) = lang_label(&c[1]);
+        if !out.iter().any(|l| l.id == id) {
+            out.push(Lang { id: id.to_string(), label: label.to_string() });
+        }
+    }
+    out
+}
+
+/// A playground language id (or alias) → its canonical id and label, as in playground.js.
+fn lang_label(raw: &str) -> (String, String) {
+    let id = raw.to_ascii_lowercase();
+    let (id, label) = match id.as_str() {
+        "js" | "javascript" => ("javascript", "JavaScript"),
+        "py" | "python" | "python3" => ("python", "Python"),
+        "c" => ("c", "C"),
+        "cpp" | "c++" | "cxx" | "cc" => ("cpp", "C++"),
+        "lua" => ("lua", "Lua"),
+        "rb" | "ruby" => ("ruby", "Ruby"),
+        "sql" | "sqlite" => ("sql", "SQLite"),
+        "duckdb" => ("duckdb", "DuckDB"),
+        "prolog" | "pl" | "swipl" => ("prolog", "Prolog"),
+        "scheme" | "scm" | "lisp" => ("scheme", "Scheme"),
+        "basic" | "bas" => ("basic", "BASIC"),
+        "rust" | "rs" => ("rust", "Rust"),
+        "go" | "golang" => ("go", "Go"),
+        "html" => ("html", "HTML"),
+        "r" => ("r", "R"),
+        "php" => ("php", "PHP"),
+        "perl" => ("perl", "Perl"),
+        "ocaml" | "ml" => ("ocaml", "OCaml"),
+        "clojure" | "clj" | "cljs" => ("clojure", "Clojure"),
+        "forth" | "fs" | "fth" => ("forth", "Forth"),
+        "fortran" | "f90" | "f95" => ("fortran", "Fortran"),
+        "bqn" => ("bqn", "BQN"),
+        "brainfuck" | "bf" => ("brainfuck", "Brainfuck"),
+        "befunge" | "befunge93" => ("befunge", "Befunge"),
+        "kotlin" | "kt" => ("kotlin", "Kotlin"),
+        "p5" | "p5js" => ("p5", "p5.js"),
+        "glsl" | "frag" | "shader" => ("glsl", "GLSL"),
+        _ => return (id.clone(), raw.to_string()),
+    };
+    (id.to_string(), label.to_string())
+}
+
+/// Where a playground page belongs on the Lab page.
+fn lab_section(it: &Item) -> &'static str {
+    if it.id.starts_with("lab/rosetta/") {
+        "rosetta"
+    } else if it.id.starts_with("lab/sketches/") || it.tags.iter().any(|t| t.eq_ignore_ascii_case("sketch")) {
+        "sketches"
+    } else {
+        "playgrounds"
+    }
+}
+
+/// A language in the Lab's Playgrounds section: how many pages use it.
+#[derive(Debug, Clone, Serialize)]
+struct LangCount {
+    id: String,
+    label: String,
+    count: usize,
 }
 
 /// A "Works with" entry on a tool page: the other tool and why the two go together.
@@ -182,6 +275,7 @@ fn kind_label(k: Kind) -> &'static str {
         Kind::App => "App",
         Kind::Playground => "Playground",
         Kind::Tool => "Tool",
+        Kind::Exploration => "Exploration",
     }
 }
 
@@ -268,10 +362,26 @@ pub fn build(site: &Site, opts: &BuildOptions) -> Result<BuildReport> {
     // Posts showing the gallery: the grid is their picture, so the hero is not repeated above it.
     let mut shows_gallery: BTreeSet<String> = BTreeSet::new();
 
+    // Tools in this build, for `tool::` frames (their titles) and "Works with".
+    let tool_titles: BTreeMap<String, String> = items.iter().filter(|i| i.kind == Kind::Tool).map(|i| (i.slug.clone(), i.title.clone())).collect();
+    // What each page's source shows: tools (`tool::`) and playground languages.
+    let mut uses_tools: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut langs: BTreeMap<String, Vec<Lang>> = BTreeMap::new();
+
     // Render every item's body in one Asciidoctor run.
     let mut docs = vec![];
     for it in &items {
         let raw = std::fs::read_to_string(&it.path)?;
+        langs.insert(it.id.clone(), playground_langs(&raw));
+        // Live tool views (passthrough iframes), before anything else reads the text.
+        let raw = if crate::toolembed::blocks(&raw).is_empty() {
+            raw
+        } else {
+            uses_tools.insert(it.id.clone(), crate::toolembed::slugs(&raw).into_iter().filter(|s| tool_titles.contains_key(s)).collect());
+            let (text, problems) = crate::toolembed::expand(&raw, |s| tool_titles.get(s).cloned());
+            warnings.extend(problems.into_iter().map(|p| format!("{}: {p}", it.id)));
+            text
+        };
         shows_models.insert(it.id.clone(), crate::model::embeds(&raw).into_iter().filter_map(|e| e.key).collect());
         // The models gallery block (a passthrough of models_grid.html).
         let gallery_blocks = crate::gallery::embeds(&raw);
@@ -352,6 +462,25 @@ pub fn build(site: &Site, opts: &BuildOptions) -> Result<BuildReport> {
         out
     };
 
+    // Explorations in a `:series:`: ordered by `:series-order:`, then date, then title.
+    let mut series: BTreeMap<String, Vec<&Item>> = BTreeMap::new();
+    for it in items.iter().filter(|i| i.kind == Kind::Exploration && !i.unlisted) {
+        if let Some(s) = it.attrs.get("series").map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            series.entry(s.to_string()).or_default().push(it);
+        }
+    }
+    for v in series.values_mut() {
+        v.sort_by(|a, b| {
+            let n = |i: &Item| i.attrs.get("series-order").and_then(|n| n.trim().parse::<i64>().ok()).unwrap_or(i64::MAX);
+            n(a).cmp(&n(b)).then(a.date.cmp(&b.date)).then(a.title.cmp(&b.title))
+        });
+    }
+    let series_of = |it: &Item| -> Option<(&String, &Vec<&Item>, usize)> {
+        let s = it.attrs.get("series")?.trim();
+        let (name, list) = series.get_key_value(s)?;
+        Some((name, list, list.iter().position(|x| x.id == it.id)?))
+    };
+
     let living = gallery_home.map(|h| h.id.clone()).zip(gallery.as_ref().and_then(|g| crate::gallery::latest_change(g, &st_dir)));
     let view = |it: &Item| -> View {
         let mut it = it.clone();
@@ -399,6 +528,13 @@ pub fn build(site: &Site, opts: &BuildOptions) -> Result<BuildReport> {
             project_title: pt,
             project_url: pu,
             works_with: works_with(it),
+            uses_tools: uses_tools
+                .get(&it.id)
+                .map(|s| s.iter().map(|s| ToolLink { url: format!("/tools/{s}/"), title: tool_titles[s].clone(), slug: s.clone() }).collect())
+                .unwrap_or_default(),
+            languages: langs.get(&it.id).cloned().unwrap_or_default(),
+            series: series_of(it).map(|(n, _, _)| n.clone()).unwrap_or_default(),
+            series_part: series_of(it).map(|(_, _, i)| i + 1).unwrap_or(0),
         }
     };
     let views: Vec<View> = items.iter().map(view).collect();
@@ -428,6 +564,7 @@ pub fn build(site: &Site, opts: &BuildOptions) -> Result<BuildReport> {
         c.insert("all_projects", &project_views);
     };
     let playgrounds = by_date(listed.iter().filter(|v| v.item.kind == Kind::Playground).cloned().collect());
+    let explorations = by_date(listed.iter().filter(|v| v.item.kind == Kind::Exploration).cloned().collect());
     let mut tools: Vec<View> = listed.iter().filter(|v| v.item.kind == Kind::Tool).cloned().collect();
     tools.sort_by(|a, b| a.item.title.to_lowercase().cmp(&b.item.title.to_lowercase()));
     // Tool categories in the order site.yaml lists them (tools: categories), then any others.
@@ -497,6 +634,7 @@ pub fn build(site: &Site, opts: &BuildOptions) -> Result<BuildReport> {
             Kind::App => "app.html",
             Kind::Playground => "playground.html",
             Kind::Tool => "tool.html",
+            Kind::Exploration => "exploration.html",
         };
         let mut c = base(&it.url, &it.title, it.unlisted || it.draft);
         c.insert("item", v);
@@ -508,6 +646,15 @@ pub fn build(site: &Site, opts: &BuildOptions) -> Result<BuildReport> {
         }
         c.insert("apps", &apps);
         c.insert("tools", &tools);
+        c.insert("explorations", &explorations);
+        if let Some((name, list, i)) = series_of(it) {
+            let link = |x: &&Item| serde_json::json!({"url": x.url, "title": x.title});
+            c.insert("series", &serde_json::json!({
+                "name": name, "part": i + 1, "count": list.len(),
+                "prev": i.checked_sub(1).and_then(|j| list.get(j)).map(link),
+                "next": list.get(i + 1).map(link),
+            }));
+        }
         if it.kind == Kind::Project {
             let ups = by_date(listed.iter().filter(|x| x.item.project.as_deref() == Some(&it.slug)).cloned().collect());
             c.insert("updates", &ups);
@@ -544,6 +691,7 @@ pub fn build(site: &Site, opts: &BuildOptions) -> Result<BuildReport> {
         home(&mut c);
         c.insert("apps", &apps);
         c.insert("tools", &tools);
+        c.insert("explorations", &explorations);
         write("index.html", tera.render("home.html", &c)?, &mut files)?;
     }
 
@@ -604,9 +752,31 @@ pub fn build(site: &Site, opts: &BuildOptions) -> Result<BuildReport> {
 
     {
         let mut c = base("/lab/", "Lab", false);
+        let section = |name: &str| -> Vec<View> {
+            let mut v: Vec<View> = playgrounds.iter().filter(|v| lab_section(&v.item) == name).cloned().collect();
+            if name != "sketches" {
+                v.sort_by_key(|v| v.item.title.to_lowercase());
+            }
+            v
+        };
+        let pg = section("playgrounds");
+        let mut lang_counts: Vec<LangCount> = vec![];
+        for l in pg.iter().flat_map(|v| v.languages.iter()) {
+            match lang_counts.iter_mut().find(|x| x.id == l.id) {
+                Some(x) => x.count += 1,
+                None => lang_counts.push(LangCount { id: l.id.clone(), label: l.label.clone(), count: 1 }),
+            }
+        }
+        lang_counts.sort_by_key(|l| l.label.to_lowercase());
+        let lab_tools: Vec<&View> = tools.iter().filter(|t| t.item.in_lab()).collect();
+        c.insert("explorations", &explorations);
+        c.insert("playgrounds", &pg);
+        c.insert("languages", &lang_counts);
+        c.insert("sketches", &section("sketches"));
+        c.insert("rosetta", &section("rosetta"));
         c.insert("apps", &apps);
+        c.insert("lab_tools", &lab_tools);
         c.insert("tools", &tools);
-        c.insert("playgrounds", &playgrounds);
         write("lab/index.html", tera.render("lab.html", &c)?, &mut files)?;
     }
 
@@ -709,8 +879,10 @@ pub fn build(site: &Site, opts: &BuildOptions) -> Result<BuildReport> {
     // Feed, sitemap, search index, robots, 404.
     {
         let mut c = base("/feed.xml", &cfg.site.title, false);
-        c.insert("entries", &posts.iter().take(30).collect::<Vec<_>>());
-        c.insert("updated", &posts.first().map(|p| p.date_iso.clone()).unwrap_or_default());
+        // The dated stream: posts and Lab explorations.
+        let stream = by_date(posts.iter().chain(&explorations).cloned().collect());
+        c.insert("entries", &stream.iter().take(30).collect::<Vec<_>>());
+        c.insert("updated", &stream.first().map(|p| p.date_iso.clone()).unwrap_or_default());
         write("feed.xml", tera.render("feed.xml", &c)?, &mut files)?;
         let mut urls: Vec<String> = vec!["/".into(), "/articles/".into(), "/projects/".into(), "/areas/".into(), "/lab/".into(), "/tools/".into()];
         urls.extend(listed.iter().map(|v| v.item.url.clone()));
@@ -742,6 +914,19 @@ pub fn build(site: &Site, opts: &BuildOptions) -> Result<BuildReport> {
         let c = base("/404.html", "Not found", true);
         write("404.html", tera.render("404.html", &c)?, &mut files)?;
         write(".nojekyll", String::new(), &mut files)?;
+    }
+
+    // Redirects from earlier addresses (`:redirect-from:`). `gw check` reports one that would
+    // replace a real page; the build never overwrites a page with one.
+    for v in &views {
+        for old in v.item.redirect_from() {
+            let rel = if old.ends_with('/') { page_file(&old) } else { old.trim_start_matches('/').to_string() };
+            if files.contains(&rel) || out.join(&rel).exists() {
+                warnings.push(format!("{}: :redirect-from: {old} is a page of its own; no redirect written", v.item.id));
+                continue;
+            }
+            write(&rel, redirect_page(&v.item.url, &v.item.title), &mut files)?;
+        }
     }
 
     // Static assets. build.preview_only folders go into draft builds only, never into a publish.
@@ -777,7 +962,7 @@ pub fn build(site: &Site, opts: &BuildOptions) -> Result<BuildReport> {
 }
 
 /// A page that sends readers on to `url` (keeping the `#project` filter), for an address that
-/// moved: /models/ when the gallery lives in a post.
+/// moved: /models/ when the gallery lives in a post, and an item's `:redirect-from:` paths.
 fn redirect_page(url: &str, title: &str) -> String {
     let u = escape_html(url);
     let js = serde_json::to_string(url).unwrap_or_default().replace('<', "\\u003c");

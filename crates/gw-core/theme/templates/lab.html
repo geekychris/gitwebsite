@@ -1,12 +1,87 @@
 {% extends "base.html" %}
 {% import "macros.html" as m %}
+{% block head %}<style>
+.lab-langs { display: flex; flex-wrap: wrap; gap: .35rem; margin: -.3rem 0 1rem; }
+.lab-langs button { font: 600 .8rem var(--sans); border: 1px solid var(--line); background: var(--surface); color: var(--muted); border-radius: 999px; padding: .18rem .65rem; cursor: pointer; }
+.lab-langs button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+.lab-langs button span { font-weight: 400; opacity: .75; margin-left: .2rem; }
+.lab-section > p.section-intro { color: var(--muted); margin: -.4rem 0 1rem; max-width: 44rem; }
+.card .card-langs, .card .card-series { font-size: .82rem; color: var(--faint); margin: 0 0 .45rem; }
+.card[hidden] { display: none; }
+</style>{% endblock %}
 {% block main %}
-<section class="wrap block page-top">
+<section class="wrap block page-top lab">
   <h1>Lab</h1>
-  <p class="lede">Things you can use right now: apps I run publicly, and code you can edit and run in your browser. For everyday developer utilities, see <a href="/tools/">Tools</a>.</p>
-  <h2 class="section-title">Apps</h2>
-  {% if apps %}<div class="grid">{% for v in apps %}{{ m::card(v=v) }}{% endfor %}</div>{% else %}<p class="empty">No public apps yet.</p>{% endif %}
-  <h2 class="section-title">Playgrounds</h2>
-  {% if playgrounds %}<div class="grid">{% for v in playgrounds %}{{ m::card(v=v) }}{% endfor %}</div>{% else %}<p class="empty">No playgrounds yet.</p>{% endif %}
+  <p class="lede">The Lab is for exploring: learning how something works by running it — walk-throughs built around live simulations, code you can edit and run in your browser, small sketches, and the same program in many languages. <a href="/tools/">Tools</a> are for getting a job done; the Lab is for poking at ideas and seeing what happens.</p>
+
+  {% if explorations %}
+  <section class="lab-section" id="explorations">
+    <h2 class="section-title">Explorations</h2>
+    <p class="section-intro">Guided experiments: a question, live tools and code to try, and what the results show.</p>
+    <div class="grid">{% for v in explorations %}{{ m::lab_card(v=v) }}{% endfor %}</div>
+  </section>
+  {% endif %}
+
+  {% if playgrounds %}
+  <section class="lab-section" id="playgrounds">
+    <h2 class="section-title">Playgrounds</h2>
+    <p class="section-intro">Pages of code to edit and run, by language.</p>
+    {% if languages | length > 1 %}
+    <div class="lab-langs" role="group" aria-label="Show playgrounds in" data-lab-langs>
+      <button type="button" data-lang="" aria-pressed="true">All</button>
+      {% for l in languages %}<button type="button" data-lang="{{ l.id }}" aria-pressed="false">{{ l.label }}<span>{{ l.count }}</span></button>{% endfor %}
+    </div>
+    {% endif %}
+    <div class="grid" data-lab-playgrounds>{% for v in playgrounds %}{{ m::lab_card(v=v) }}{% endfor %}</div>
+  </section>
+  {% endif %}
+
+  {% if sketches %}
+  <section class="lab-section" id="sketches">
+    <h2 class="section-title">Sketches</h2>
+    <p class="section-intro">Small visual experiments: shaders, generative drawings, canvas toys.</p>
+    <div class="grid">{% for v in sketches %}{{ m::lab_card(v=v) }}{% endfor %}</div>
+  </section>
+  {% endif %}
+
+  {% if rosetta %}
+  <section class="lab-section" id="rosetta">
+    <h2 class="section-title">Rosetta</h2>
+    <p class="section-intro">Same program, many languages — one task written side by side, each runnable.</p>
+    <div class="grid">{% for v in rosetta %}{{ m::lab_card(v=v) }}{% endfor %}</div>
+  </section>
+  {% endif %}
+
+  {% if apps %}
+  <section class="lab-section" id="apps">
+    <h2 class="section-title">Apps</h2>
+    <p class="section-intro">Things I run publicly.</p>
+    <div class="grid">{% for v in apps %}{{ m::card(v=v) }}{% endfor %}</div>
+  </section>
+  {% endif %}
+
+  {% if lab_tools %}
+  <section class="lab-section" id="lab-tools">
+    <h2 class="section-title">Notebooks and sandboxes in Tools</h2>
+    <p class="section-intro">Open-ended tools that live under <a href="/tools/">Tools</a> but are made for experimenting.</p>
+    <div class="tools-grid">{% for t in lab_tools %}<a class="tool-card" href="{{ t.url }}"><strong>{{ t.title }}</strong><span>{{ t.summary }}</span></a>{% endfor %}</div>
+  </section>
+  {% endif %}
+
+  {% if not explorations and not playgrounds and not sketches and not rosetta and not apps and not lab_tools %}<p class="empty">Nothing in the Lab yet.</p>{% endif %}
 </section>
+<script>
+(() => {
+  const bar = document.querySelector('[data-lab-langs]');
+  if (!bar) return;
+  const cards = document.querySelectorAll('[data-lab-playgrounds] > [data-langs]');
+  bar.addEventListener('click', e => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    bar.querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+    const l = b.dataset.lang;
+    cards.forEach(c => { c.hidden = !!l && !c.dataset.langs.split(' ').includes(l); });
+  });
+})();
+</script>
 {% endblock %}

@@ -23,5 +23,7 @@ pub mod userconfig;
 pub mod init;
 pub mod story;
 pub mod enhance;
+pub mod toolcat;
+pub mod toolembed;
 
 pub use site::Site;
