@@ -58,8 +58,6 @@ impl ViewHost for Views {
         let base = self.base.clone();
         WebviewWindowBuilder::new(&self.app, &id, WebviewUrl::External(parsed))
             .title(title)
-            // window.__GW_APP__ / __gwNative and the Web API shims (native_inject.rs)
-            .initialization_script(crate::native_inject::script(&id))
             .inner_size(1200.0, 860.0)
             .min_inner_size(480.0, 360.0)
             .on_navigation(move |u| {

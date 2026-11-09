@@ -5,7 +5,6 @@
 #   make serve      run the UI + REST + preview at http://127.0.0.1:8790/app/
 #   make check      cargo test (+ gw check SITE=… when SITE is set)
 #   make app        build the desktop app bundle
-#   make mac-helper build the Swift helper for native.mac (target/gw-mac-helper)
 #   make install    gw → ~/.local/bin, skills → ~/.claude/skills, app → ~/Applications
 #   make docs       render docs/index.adoc to docs/index.html
 
@@ -14,7 +13,7 @@ GW := target/release/gw
 SITE ?=
 SITE_ARG := $(if $(SITE),--site $(SITE),)
 
-.PHONY: all gw mac-helper site preview serve check app install install-gw install-skills install-app docs
+.PHONY: all gw site preview serve check app install install-gw install-skills install-app docs
 
 all: gw
 
@@ -34,18 +33,14 @@ check: gw
 	cargo test -q
 	$(if $(SITE),$(GW) $(SITE_ARG) check,)
 
-mac-helper:
-	xcrun swiftc -O -target arm64-apple-macos13 -o target/gw-mac-helper app/mac-helper/*.swift
-
 app:
 	cd app/src-tauri && cargo tauri build --bundles app
 
 install: install-gw install-skills install-app
 
-install-gw: gw mac-helper
+install-gw: gw
 	mkdir -p $(HOME)/.local/bin
 	ln -sf $(CURDIR)/$(GW) $(HOME)/.local/bin/gw
-	ln -sf $(CURDIR)/target/gw-mac-helper $(HOME)/.local/bin/gw-mac-helper
 	@echo "gw → ~/.local/bin/gw (make sure ~/.local/bin is on PATH)"
 
 install-skills:
