@@ -11,10 +11,6 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod native;
-mod native_inject;
-mod native_panels;
-mod native_window;
 mod views;
 
 use std::io::{Read, Write};
@@ -209,8 +205,6 @@ fn main() {
 
             // Tool windows for /api/view and MCP tool_open.
             gw::companion::view::set_view_host(views::Views::new(app.handle().clone(), base.clone()));
-            // Native features for tool windows (/v1/native/…).
-            gw::companion::native::host::set_native_host(native::AppNative { app: app.handle().clone() });
 
             // Companion pairing requests: a dialog (the gateway starts with the server).
             {
