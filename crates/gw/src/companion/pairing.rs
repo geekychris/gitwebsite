@@ -14,7 +14,10 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
-pub const SCOPES: &[&str] = &["relay.http", "relay.tcp", "relay.docker", "relay.kube", "relay.git", "relay.lan", "relay.ws", "relay.s3", "view"];
+pub const SCOPES: &[&str] = &[
+    "relay.http", "relay.tcp", "relay.docker", "relay.kube", "relay.git", "relay.lan", "relay.ws", "relay.s3", "view",
+    "native.fs", "native.device", "native.exec", "native.mac", "native.app", "native.store",
+];
 /// What an empty scope list means: the v1 relays. The v1.2 relays (`relay.lan`, `relay.ws`,
 /// `relay.s3`) reach the user's network and storage, so a page must ask for them by name.
 pub const DEFAULT_SCOPES: &[&str] = &["relay.http", "relay.tcp", "relay.docker", "relay.kube", "relay.git"];

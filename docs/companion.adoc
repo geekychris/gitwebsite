@@ -446,6 +446,81 @@ These were decided while building v1.2; the URL shapes are as in the draft.
 * Upstreams: no `wsprnet` (wspr.live already sends CORS headers); `open-elevation` is an alias of
   `open-meteo` (api.open-meteo.com), not api.open-elevation.com.
 
+== Native features: `/v1/native/…`
+
+The app also does what WebKit and the browser cannot do for a tool: talk to serial, Bluetooth, USB,
+HID and MIDI devices; show open and save panels and work on the files you chose; run a fixed set of
+system commands (`launchctl`, `defaults`, `plutil` …); use Apple's frameworks (Vision, PDFKit,
+Speech, AVFoundation, Foundation Models) through a helper; and give a tool's window a title, menus,
+notifications and a menu-bar item. The code is in `crates/gw/src/companion/native/`.
+
+[cols="1,2,3"]
+|===
+| Scope | Prefix | What
+
+| `native.fs` | `/v1/native/fs/…` | open and save panels; reading and writing the files the user chose
+| `native.device` | `/v1/native/device/…` | serial, Bluetooth LE, USB, HID and MIDI (behind the Web API shims)
+| `native.exec` | `/v1/native/exec/…` | a fixed catalogue of system commands with checked arguments
+| `native.mac` | `/v1/native/mac/…` | Apple frameworks through `gw-mac-helper`
+| `native.app` | `/v1/native/app/…` | window title, edited dot and menus; notifications; menu-bar items
+| `native.store` | `/v1/native/store/…` | per-tool storage in Application Support
+|===
+
+* *Capabilities.* `/v1/hello` lists what is available now, with names under the scope: for example
+  `native.device.serial`, `native.fs.panels`, `native.mac.vision.ocr`. A page tests for the capability
+  it needs, never the version. Things that need the desktop app's main thread (panels, menus,
+  notifications) are listed only when the app runs, not under `gw serve` alone.
+* *Pairing.* These are ordinary scopes. The app's own preview pages are paired without asking. Any
+  other page has to ask for a native scope by name, and the user approves it as usual.
+* *First-use approvals.* Anything that changes the system, or reaches something new, asks first through
+  the same approvals as LAN hosts. The new approval kinds are `exec` (a command that changes
+  something), `fs` (a path the user did not pick in a panel) and `device` (a device the user did not
+  choose in the chooser).
+* *Window.* Requests from a tool window carry `X-GW-Window: <window id>`, so the app knows which
+  window to change and which menus to show.
+
+=== In the app's tool windows
+
+The app injects a script at document start into every tool window (`app/src-tauri/inject/`). The
+bridge sets `window.__GW_APP__` (`{window, companion, tool, version}`) and `window.__gwNative`:
+
+* `fetch(path, init)`: a fetch with the token and `X-GW-Window`.
+* `ws(path)`: resolves to an open WebSocket.
+* `caps()`: the `/v1/hello` capabilities.
+* `on(event, fn)` and `emit(event, data)`: events from the app, such as a menu item or a file to open.
+  Events that arrive before any listener are queued.
+
+After the bridge, the app injects shims for Web Serial, Web Bluetooth, WebUSB, WebHID and Web MIDI.
+Each one installs itself only where WebKit lacks the API. The site kit's `k.native` wraps the bridge
+for tools; it is `null` outside the app.
+
+=== Apple frameworks: `/v1/native/mac`
+
+`gw-mac-helper` is a Swift program in `app/mac-helper/`. The app's `build.rs` builds it into
+`target/gw-mac-helper`, or run `make mac-helper`. The bundle carries it in `Contents/MacOS`. The
+companion looks for it in this order:
+
+. `$GW_MAC_HELPER`.
+. Next to the running executable.
+. The workspace's `target/`.
+
+* `GET /v1/native/mac` returns `{"ops":[{"op","about","session"}]}`.
+* `POST /v1/native/mac/<op>` runs one call. Its arguments are a JSON object in `X-Native-Args`, and the
+  body is the input bytes. The answer has the op's own content type: JSON, bytes (small metadata goes
+  in `X-Native-Meta`), or `application/x-ndjson`, which is streamed as it is produced.
+* `GET /v1/native/mac/session/<op>` is a WebSocket for long-running ops. The first text message holds
+  the arguments. After that, JSON lines go both ways. Closing the socket ends the op.
+
+The helper itself is called like this:
+
+* `gw-mac-helper --list` lists the ops.
+* `gw-mac-helper <op> <args-json>` reads the input on stdin. It writes `{"type","meta"}` and a newline,
+  then the body.
+* With `--session` added, it exchanges JSON lines until stdin closes.
+
+A failure exits non-zero, with `{"error":"…"}` as the last line on stderr. Each area of ops is its own
+Swift file and registers itself through the `modules` list in `main.swift`.
+
 == Tool viewer
 
 The app's REST API opens tools in windows:

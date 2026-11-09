@@ -4,5 +4,13 @@
 <dict>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>gitwebsite asks Photos to export the photos you choose for a story.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>The site's tools connect to Bluetooth devices you choose (sensors, lamps, printers).</string>
+	<key>NSCameraUsageDescription</key>
+	<string>The site's tools use the camera when you ask them to (recording, scanning).</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>The site's tools use the microphone when you ask them to (dictation, recording).</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Dictation in the site's tools transcribes speech on this Mac.</string>
 </dict>
 </plist>
