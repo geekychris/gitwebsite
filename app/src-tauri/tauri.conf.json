@@ -25,7 +25,10 @@
       "icons/icon.ico"
     ],
     "macOS": {
-      "minimumSystemVersion": "11.0"
+      "minimumSystemVersion": "11.0",
+      "files": {
+        "MacOS/gw-mac-helper": "../../target/gw-mac-helper"
+      }
     }
   }
 }

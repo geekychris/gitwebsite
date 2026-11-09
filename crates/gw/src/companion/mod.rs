@@ -11,6 +11,7 @@
 
 pub mod approvals;
 pub mod lan;
+pub mod native;
 pub mod pairing;
 pub mod relay_docker;
 pub mod relay_git;
@@ -216,6 +217,9 @@ impl Gateway {
         let what = match kind {
             "lan" => format!("LAN host {target}"),
             "tcp" => format!("TCP target {target}"),
+            "exec" => format!("running {target}"),
+            "fs" => format!("access to {target}"),
+            "device" => format!("the device {target}"),
             _ => format!("deleting s3://{target}"),
         };
         match self.approvals.ask(kind, target, origin, tool, detail) {
@@ -637,6 +641,9 @@ async fn hello(State(gw): State<Arc<Gateway>>, axum::Extension(Origin(origin)): 
         }
     }
     caps.push("view");
+    let native = native::capabilities(&gw);
+    let mut caps: Vec<String> = caps.into_iter().map(str::to_string).collect();
+    caps.extend(native);
     let paired = presented(&h).and_then(|p| gw.tokens.check(&p.token, &origin));
     Json(json!({
         "name": NAME, "version": VERSION, "capabilities": caps,
@@ -771,6 +778,7 @@ pub fn router(gw: Arc<Gateway>) -> Router {
         .route("/v1/relay/ws", get(relay_ws::handle))
         .route("/v1/relay/s3", get(relay_s3::handle))
         .route("/v1/relay/s3/{*rest}", any(relay_s3::handle))
+        .merge(native::router())
         .fallback(|| async { err(StatusCode::NOT_FOUND, "no such companion endpoint (see /v1/hello)") })
         .layer(middleware::from_fn_with_state(gw.clone(), gate))
         .layer(axum::extract::DefaultBodyLimit::max(64 * 1024 * 1024))
