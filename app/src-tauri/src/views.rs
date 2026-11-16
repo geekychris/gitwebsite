@@ -60,6 +60,7 @@ impl ViewHost for Views {
             .title(title)
             .inner_size(1200.0, 860.0)
             .min_inner_size(480.0, 360.0)
+            .on_download(crate::downloads::handler(self.base.clone()))
             .on_navigation(move |u| {
                 if u.as_str().starts_with(&base) || matches!(u.scheme(), "about" | "blob" | "data") {
                     return true;
