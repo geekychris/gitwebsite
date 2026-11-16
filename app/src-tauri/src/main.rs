@@ -11,6 +11,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod downloads;
 mod views;
 
 use std::io::{Read, Write};
@@ -176,6 +177,8 @@ fn main() {
                 // Let the page handle drops itself (photos onto a story, from Finder or Photos);
                 // Tauri's own handler would swallow them.
                 .disable_drag_drop_handler()
+                // a tool's Save / Export in the preview: into ~/Downloads (see downloads.rs)
+                .on_download(downloads::handler(base.clone()))
                 // The window only ever shows the app. Anything else — a file dropped where the
                 // page doesn't take it (WebKit would open it in place, with no way back), or a
                 // link to another site — opens in the default browser instead.
