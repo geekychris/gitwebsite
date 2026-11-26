@@ -223,6 +223,20 @@ fn extra_dirs() -> Vec<PathBuf> {
     vec![h.join(".local/bin"), PathBuf::from("/opt/homebrew/bin"), PathBuf::from("/usr/local/bin"), h.join(".claude/local"), h.join(".npm-global/bin"), h.join("bin")]
 }
 
+/// PATH for the desktop app: the [`extra_dirs`] that exist, ahead of the short PATH it starts
+/// with, so a bare `ruby` (site.yaml `build.ruby`), `pandoc` or `git` finds the Homebrew one
+/// as it does in a terminal, not the system Ruby without asciidoctor.
+pub fn app_path() -> std::ffi::OsString {
+    let cur = std::env::var_os("PATH").unwrap_or_default();
+    let mut dirs: Vec<PathBuf> = extra_dirs().into_iter().filter(|d| d.is_dir()).collect();
+    for d in std::env::split_paths(&cur) {
+        if !dirs.contains(&d) {
+            dirs.push(d);
+        }
+    }
+    std::env::join_paths(dirs).unwrap_or(cur)
+}
+
 /// `env` if set, then the usual install locations, then PATH — skipping temporary directories
 /// (a terminal session's shims there vanish when it ends, while the app keeps running).
 pub(crate) fn find_program(name: &str, env: &str) -> Option<PathBuf> {

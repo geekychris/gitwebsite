@@ -1403,10 +1403,11 @@ fn initial_preview(root: &Path) {
 
 /// Rebuild the preview whenever the site's files change on disk, however they changed: the app,
 /// an editor, `git pull`, a merge. Waits for the files to stop changing first, so a checkout that
-/// touches many files builds once.
+/// touches many files builds once. A build that fails isn't retried until the files change again.
 fn watch_preview(st: AppState) {
     std::thread::spawn(move || {
         let mut seen: Option<(PathBuf, u64)> = None;
+        let mut failed: Option<u64> = None;
         loop {
             std::thread::sleep(Duration::from_secs(2));
             let Ok(root) = st.root() else { continue };
@@ -1414,10 +1415,16 @@ fn watch_preview(st: AppState) {
             let built = *PREVIEW.lock().unwrap_or_else(|e| e.into_inner());
             let settled = matches!(&seen, Some((r, f)) if *r == root && *f == fp);
             seen = Some((root.clone(), fp));
-            if built.is_some() && built != Some(fp) && settled {
+            if built.is_some() && built != Some(fp) && settled && failed != Some(fp) {
                 match Site::open(Some(&root)).and_then(|s| build_preview(&s)) {
-                    Ok(r) => eprintln!("preview: files changed, rebuilt {} pages", r.pages),
-                    Err(e) => eprintln!("preview: rebuild failed: {e:#}"),
+                    Ok(r) => {
+                        failed = None;
+                        eprintln!("preview: files changed, rebuilt {} pages", r.pages)
+                    }
+                    Err(e) => {
+                        failed = Some(fp);
+                        eprintln!("preview: rebuild failed: {e:#}")
+                    }
                 }
             }
         }
