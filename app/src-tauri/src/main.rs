@@ -143,6 +143,8 @@ fn open_url(url: &str) {
 }
 
 fn main() {
+    // Started from Finder the app has PATH=/usr/bin:/bin:/usr/sbin:/sbin; set before any thread starts.
+    std::env::set_var("PATH", gw::enhance::app_path());
     let root = site_root();
     let listener = bind().expect("cannot bind a local port");
     listener.set_nonblocking(true).expect("nonblocking");

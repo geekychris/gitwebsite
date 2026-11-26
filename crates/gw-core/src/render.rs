@@ -96,6 +96,7 @@ impl Renderer {
             .iter()
             .map(|d| Job { id: &d.id, text: &d.text, base_dir: d.base_dir.display().to_string(), attrs: &d.attrs })
             .collect();
+        let input = serde_json::to_string(&jobs)?;
         let mut child = Command::new(&self.ruby)
             .args(["-e", SCRIPT])
             .stdin(Stdio::piped())
@@ -103,11 +104,14 @@ impl Renderer {
             .stderr(Stdio::piped())
             .spawn()
             .with_context(|| format!("starting {} (Ruby with the asciidoctor gem is required)", self.ruby))?;
-        child.stdin.take().unwrap().write_all(serde_json::to_string(&jobs)?.as_bytes())?;
+        // Ruby may exit before reading its input (no asciidoctor gem): wait for it whatever
+        // the write did, so it is reaped and its own error is the one reported.
+        let wrote = child.stdin.take().unwrap().write_all(input.as_bytes());
         let res = child.wait_with_output()?;
         if !res.status.success() {
             bail!("asciidoctor failed: {}", String::from_utf8_lossy(&res.stderr));
         }
+        wrote.context("writing to asciidoctor")?;
         let rendered: BTreeMap<String, Out> = serde_json::from_slice(&res.stdout).context("reading asciidoctor output")?;
         let mut errors = vec![];
         for d in todo {
@@ -131,4 +135,27 @@ pub fn render_one(ruby: &str, cache: &Path, doc: Doc) -> Result<String> {
     let id = doc.id.clone();
     let r = Renderer { ruby: ruby.into(), cache_dir: cache.into() };
     Ok(r.render_all(&[doc])?.remove(&id).unwrap_or_default())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A Ruby that exits before reading its input (as the system Ruby does without the
+    /// asciidoctor gem): the renderer reports its error rather than the broken pipe, which
+    /// means it waited for the process instead of leaving a zombie.
+    #[test]
+    fn ruby_exiting_early_is_waited_for() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("gw-render-early-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ruby = dir.join("ruby");
+        std::fs::write(&ruby, "#!/bin/sh\necho 'asciidoctor gem not found' >&2\nexit 3\n").unwrap();
+        std::fs::set_permissions(&ruby, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // Far more than a pipe holds, so the write fails once the process has gone.
+        let doc = Doc { id: "big".into(), text: "x".repeat(1 << 20), base_dir: dir.clone(), attrs: BTreeMap::new() };
+        let err = render_one(ruby.to_str().unwrap(), &dir.join("cache"), doc).unwrap_err();
+        assert!(format!("{err:#}").contains("asciidoctor gem not found"), "{err:#}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

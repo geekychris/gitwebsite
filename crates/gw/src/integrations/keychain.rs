@@ -36,11 +36,13 @@ pub fn set(service: &str, account: &str, value: &str) -> Result<()> {
         quote(account),
         quote(value)
     );
-    child.stdin.take().unwrap().write_all(line.as_bytes())?;
+    // Wait for security even if the write fails, so it is reaped and its error is reported.
+    let wrote = child.stdin.take().unwrap().write_all(line.as_bytes());
     let out = child.wait_with_output()?;
     if !out.status.success() {
         bail!("storing {service}/{account} in the Keychain failed: {}", String::from_utf8_lossy(&out.stderr));
     }
+    wrote?;
     Ok(())
 }
 

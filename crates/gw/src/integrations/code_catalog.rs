@@ -73,10 +73,13 @@ fn gh_raw(args: &[&str], input: Option<&[u8]>) -> Result<Vec<u8>> {
     let mut cmd = Command::new(gh_bin()?);
     cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped()).stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() });
     let mut child = cmd.spawn().context("running gh")?;
-    if let Some(data) = input {
-        child.stdin.take().context("gh stdin")?.write_all(data)?;
-    }
+    // Wait for gh even if the write fails, so it is reaped.
+    let wrote = match (input, child.stdin.take()) {
+        (Some(data), Some(mut stdin)) => stdin.write_all(data),
+        _ => Ok(()),
+    };
     let out = child.wait_with_output()?;
+    wrote.context("writing to gh")?;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
         let body = String::from_utf8_lossy(&out.stdout);
@@ -1212,8 +1215,10 @@ fn ask_claude(site: &Site, prompt: &str) -> Result<Value> {
         .stderr(Stdio::piped())
         .spawn()
         .context("starting claude")?;
-    child.stdin.take().context("claude stdin")?.write_all(prompt.as_bytes())?;
+    // Wait for claude even if the write fails, so it is reaped.
+    let wrote = child.stdin.take().context("claude stdin").and_then(|mut s| Ok(s.write_all(prompt.as_bytes())?));
     let out = child.wait_with_output()?;
+    wrote?;
     let text = String::from_utf8_lossy(&out.stdout).to_string();
     let v: Value = serde_json::from_str(&text).with_context(|| format!("claude: {} {}", text.chars().take(300).collect::<String>(), String::from_utf8_lossy(&out.stderr).chars().take(300).collect::<String>()))?;
     if v["is_error"].as_bool() == Some(true) || !out.status.success() {

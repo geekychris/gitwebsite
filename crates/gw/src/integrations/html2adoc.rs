@@ -34,11 +34,13 @@ pub fn convert(html: &str) -> Result<String> {
         .stderr(Stdio::piped())
         .spawn()
         .context("running pandoc (brew install pandoc)")?;
-    child.stdin.take().unwrap().write_all(cleaned.as_bytes())?;
+    // Wait for pandoc even if the write fails, so it is reaped and its error is reported.
+    let wrote = child.stdin.take().unwrap().write_all(cleaned.as_bytes());
     let out = child.wait_with_output()?;
     if !out.status.success() {
         bail!("pandoc failed: {}", String::from_utf8_lossy(&out.stderr));
     }
+    wrote?;
     Ok(tidy(&String::from_utf8_lossy(&out.stdout)))
 }
 
